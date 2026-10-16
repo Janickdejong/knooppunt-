@@ -229,9 +229,9 @@ class MapActivity : Activity() {
         // Navigatiekaart bovenin: bocht, afstand en volgend knooppunt.
         navCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(night, 20)
+            background = rounded(night, 18)
             elevation = dp(8).toFloat()
-            setPadding(dp(16), dp(14), dp(16), dp(12))
+            setPadding(dp(14), dp(10), dp(14), dp(10))
             visibility = View.GONE
         }
         val navTop = LinearLayout(this).apply {
@@ -244,18 +244,18 @@ class MapActivity : Activity() {
                 setColor(mint)
             }
         }
-        navTop.addView(navIcon, LinearLayout.LayoutParams(dp(84), dp(84)))
+        navTop.addView(navIcon, LinearLayout.LayoutParams(dp(62), dp(62)))
         val navText = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), 0, 0, 0)
+            setPadding(dp(14), 0, 0, 0)
         }
         navBig = TextView(this).apply {
-            textSize = 42f
+            textSize = 34f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
         }
         navLine = TextView(this).apply {
-            textSize = 19f
+            textSize = 16f
             setTextColor(mint)
         }
         navText.addView(navBig)
@@ -265,10 +265,10 @@ class MapActivity : Activity() {
         val nodeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, 0)
+            setPadding(0, dp(6), 0, 0)
         }
         navNodeBadge = TextView(this).apply {
-            textSize = 15f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.BLACK)
@@ -278,11 +278,11 @@ class MapActivity : Activity() {
                 setStroke(dp(2), mint)
             }
         }
-        nodeRow.addView(navNodeBadge, LinearLayout.LayoutParams(dp(36), dp(36)))
+        nodeRow.addView(navNodeBadge, LinearLayout.LayoutParams(dp(30), dp(30)))
         navNodeText = TextView(this).apply {
-            textSize = 15f
+            textSize = 14f
             setTextColor(Color.parseColor("#B7C3D4"))
-            setPadding(dp(12), 0, 0, 0)
+            setPadding(dp(10), 0, 0, 0)
         }
         nodeRow.addView(navNodeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         navCard.addView(nodeRow)
@@ -295,14 +295,14 @@ class MapActivity : Activity() {
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(night, 20)
+            background = rounded(night, 18)
             elevation = dp(8).toFloat()
-            setPadding(dp(20), dp(14), dp(16), dp(14))
+            setPadding(dp(18), dp(10), dp(12), dp(10))
             visibility = View.GONE
         }
         val etaColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         etaMain = TextView(this).apply {
-            textSize = 24f
+            textSize = 21f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
         }
@@ -320,7 +320,7 @@ class MapActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = rounded(Color.parseColor("#C0392B"), 16)
-            setPadding(dp(26), dp(12), dp(26), dp(12))
+            setPadding(dp(24), dp(10), dp(24), dp(10))
             setOnClickListener { stopNavigation() }
         }
         navBar.addView(stop)
@@ -332,7 +332,7 @@ class MapActivity : Activity() {
         // Snelheid, links onderin.
         speedView = TextView(this).apply {
             gravity = Gravity.CENTER
-            textSize = 22f
+            textSize = 19f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(ink)
             background = GradientDrawable().apply {
@@ -344,7 +344,7 @@ class MapActivity : Activity() {
             text = "0"
             visibility = View.GONE
         }
-        root.addView(speedView, FrameLayout.LayoutParams(dp(72), dp(72)).apply {
+        root.addView(speedView, FrameLayout.LayoutParams(dp(60), dp(60)).apply {
             gravity = Gravity.BOTTOM or Gravity.START
             setMargins(dp(14), 0, 0, dp(100))
         })
@@ -574,7 +574,7 @@ class MapActivity : Activity() {
 
     private fun loadVisibleCells() {
         if (!bundleChecked) return
-        if (map.zoomLevelDouble < 12.0) {
+        if (map.zoomLevelDouble < NetOverlay.SHOW_FROM) {
             setStatus("Zoom verder in om de knooppunten te zien")
             return
         }
@@ -842,12 +842,12 @@ class MapActivity : Activity() {
     private fun renderNav(mode: Int, angle: Float, big: String, line: String, nodeRef: String, nodeText: String, off: Boolean) {
         navIcon.set(mode, angle)
         navBig.text = big
-        navBig.textSize = if (big.length > 8) 28f else 42f
+        navBig.textSize = if (big.length > 8) 24f else 34f
         navLine.text = line
         navNodeBadge.text = nodeRef
-        navNodeBadge.textSize = if (nodeRef.length > 2) 12f else 15f
+        navNodeBadge.textSize = if (nodeRef.length > 2) 11f else 14f
         navNodeText.text = nodeText
-        navCard.background = rounded(if (off) warn else night, 20)
+        navCard.background = rounded(if (off) warn else night, 18)
     }
 
     /** Bocht of rechtdoor: symbool, grote afstand en een regel eronder. */

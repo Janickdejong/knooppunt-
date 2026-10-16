@@ -80,8 +80,8 @@ class NetOverlay(private val dens: Float) : Overlay() {
     private fun radiusDp(zoom: Double): Float = when {
         zoom >= 15.0 -> 17f
         zoom >= 14.0 -> 15f
-        zoom >= 13.0 -> 12f
-        else -> 9f
+        zoom >= 13.0 -> 13f
+        else -> 10f
     }
 
     override fun draw(c: Canvas, osmv: MapView, shadow: Boolean) {
@@ -91,7 +91,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
         val bb = osmv.boundingBox
         val n = net
 
-        if (n != null && zoom >= 12.0) {
+        if (n != null && zoom >= SHOW_FROM) {
             for (e in n.edges) {
                 if (e.maxLat < bb.latSouth || e.minLat > bb.latNorth ||
                     e.maxLon < bb.lonWest || e.minLon > bb.lonEast
@@ -117,15 +117,18 @@ class NetOverlay(private val dens: Float) : Overlay() {
             }
         }
 
-        if (n != null && zoom >= 11.0) {
-            val r = radiusDp(zoom) * dens
+        // Alle knooppunten pas vanaf een bruikbaar zoomniveau; de gekozen route blijft altijd zichtbaar.
+        if (n != null && (zoom >= SHOW_FROM || routeIds.isNotEmpty())) {
+            val all = zoom >= SHOW_FROM
+            val r = (if (all) radiusDp(zoom) else 6f) * dens
             ring.strokeWidth = 2.5f * dens
             text.textSize = r * 1.05f
             val fm = text.fontMetrics
             val textOffset = -(fm.ascent + fm.descent) / 2f
             val w = osmv.width
             val h = osmv.height
-            for (node in n.nodes.values) {
+            val shown = if (all) n.nodes.values else routeIds.mapNotNull { n.nodes[it] }
+            for (node in shown) {
                 if (node.pos.latitude < bb.latSouth || node.pos.latitude > bb.latNorth ||
                     node.pos.longitude < bb.lonWest || node.pos.longitude > bb.lonEast
                 ) continue
@@ -144,7 +147,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 } else {
                     c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, ring)
                 }
-                if (zoom >= 12.5) {
+                if (all && zoom >= 13.0) {
                     text.color = if (selected) Color.WHITE else Color.BLACK
                     c.drawText(node.ref, tmp.x.toFloat(), tmp.y + textOffset, text)
                 }
@@ -178,7 +181,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
 
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val n = net ?: return false
-        if (navigating || mapView.zoomLevelDouble < 11.0) return false
+        if (navigating || mapView.zoomLevelDouble < SHOW_FROM) return false
         val pj = mapView.projection
         val limit = 30f * dens
         var best: KNode? = null
@@ -196,5 +199,10 @@ class NetOverlay(private val dens: Float) : Overlay() {
         val hit = best ?: return false
         onNodeTap?.invoke(hit)
         return true
+    }
+
+    companion object {
+        /** Vanaf dit zoomniveau tonen we alle knooppunten en verbindingen. */
+        const val SHOW_FROM = 12.5
     }
 }
