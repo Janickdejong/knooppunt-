@@ -25,6 +25,7 @@ import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
@@ -819,6 +820,9 @@ class MapActivity : Activity() {
                 obj.put("lat", routeNodes.first().pos.latitude)
                 obj.put("lon", routeNodes.first().pos.longitude)
                 obj.put("date", SimpleDateFormat("d MMM yyyy", Locale("nl", "NL")).format(Date()))
+                obj.put("refs", JSONArray(routeNodes.map { it.ref }))
+                obj.put("meters", totalLength())
+                obj.put("pts", routeShape())
                 list.put(obj)
                 prefs.edit().putString("routes", list.toString()).apply()
                 Toast.makeText(this, "Route opgeslagen", Toast.LENGTH_SHORT).show()
@@ -827,36 +831,116 @@ class MapActivity : Activity() {
             .show()
     }
 
+    /** De vorm van de route, afgevlakt tot ongeveer 120 punten, voor het miniatuur in de lijst. */
+    private fun routeShape(): JSONArray {
+        val all = ArrayList<GeoPoint>()
+        for (leg in legs) all.addAll(leg.pts)
+        val arr = JSONArray()
+        if (all.isEmpty()) return arr
+        val step = max(1, all.size / 120)
+        var i = 0
+        while (i < all.size) {
+            arr.put(all[i].latitude)
+            arr.put(all[i].longitude)
+            i += step
+        }
+        arr.put(all.last().latitude)
+        arr.put(all.last().longitude)
+        return arr
+    }
+
     private fun openRoutes() {
         val list = savedRoutes()
         if (list.length() == 0) {
             Toast.makeText(this, "Je hebt nog geen routes opgeslagen", Toast.LENGTH_SHORT).show()
             return
         }
-        val names = Array(list.length()) { i ->
-            val o = list.getJSONObject(i)
-            o.optString("name") + "\n" + o.optString("date")
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
         }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Opgeslagen routes")
-            .setItems(names) { _, which -> loadRoute(list.getJSONObject(which)) }
+            .setView(ScrollView(this).apply { addView(column) })
             .setNegativeButton("Sluiten", null)
             .create()
-        dialog.show()
-        dialog.listView.setOnItemLongClickListener { _, _, position, _ ->
-            AlertDialog.Builder(this)
-                .setTitle("Route verwijderen?")
-                .setMessage(list.getJSONObject(position).optString("name"))
-                .setPositiveButton("Verwijderen") { _, _ ->
-                    val updated = JSONArray()
-                    for (i in 0 until list.length()) if (i != position) updated.put(list.getJSONObject(i))
-                    prefs.edit().putString("routes", updated.toString()).apply()
-                    dialog.dismiss()
-                }
-                .setNegativeButton("Annuleren", null)
-                .show()
-            true
+        for (i in 0 until list.length()) {
+            column.addView(routeRow(list.getJSONObject(i), i, dialog))
         }
+        dialog.show()
+    }
+
+    private fun routeRow(o: JSONObject, index: Int, dialog: AlertDialog): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            setOnClickListener {
+                dialog.dismiss()
+                loadRoute(o)
+            }
+        }
+        val shape = o.optJSONArray("pts")
+        if (shape != null && shape.length() >= 4) {
+            val flat = DoubleArray(shape.length()) { shape.getDouble(it) }
+            row.addView(RouteThumb(this, flat), LinearLayout.LayoutParams(dp(80), dp(80)).apply {
+                rightMargin = dp(14)
+            })
+        }
+        val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        text.addView(TextView(this).apply {
+            this.text = o.optString("name")
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        val refs = o.optJSONArray("refs")
+        if (refs != null && refs.length() > 0) {
+            val all = (0 until refs.length()).map { refs.optString(it) }
+            val shown = if (all.size > 8) all.take(3) + "\u2026" + all.takeLast(3) else all
+            text.addView(TextView(this).apply {
+                this.text = shown.joinToString(" \u2192 ")
+                textSize = 14f
+                alpha = 0.85f
+            })
+        }
+        val meters = o.optDouble("meters", 0.0)
+        val stats = ArrayList<String>()
+        if (meters > 0) {
+            stats.add(formatKm(meters))
+            stats.add("\u00B1 ${(meters / 1000.0 / 16.0 * 60.0).roundToInt()} min")
+        }
+        stats.add(o.optString("date"))
+        text.addView(TextView(this).apply {
+            this.text = stats.joinToString(" \u00B7 ")
+            textSize = 13f
+            alpha = 0.65f
+        })
+        text.addView(TextView(this).apply {
+            this.text = "Verwijderen"
+            textSize = 13f
+            alpha = 0.8f
+            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            setPadding(0, dp(8), dp(16), dp(4))
+            setOnClickListener { confirmDelete(o, index, dialog) }
+        })
+        row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        return row
+    }
+
+    private fun confirmDelete(o: JSONObject, index: Int, dialog: AlertDialog) {
+        AlertDialog.Builder(this)
+            .setTitle("Route verwijderen?")
+            .setMessage(o.optString("name"))
+            .setPositiveButton("Verwijderen") { _, _ ->
+                val list = savedRoutes()
+                val updated = JSONArray()
+                for (i in 0 until list.length()) if (i != index) updated.put(list.getJSONObject(i))
+                prefs.edit().putString("routes", updated.toString()).apply()
+                dialog.dismiss()
+                if (updated.length() > 0) openRoutes()
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
     }
 
     private fun loadRoute(obj: JSONObject) {
