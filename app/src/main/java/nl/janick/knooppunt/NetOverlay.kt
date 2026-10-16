@@ -20,6 +20,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var me: GeoPoint? = null
     var navigating = false
     var nextId: Long = -1L
+    var guide: List<GeoPoint> = emptyList()
     var onNodeTap: ((KNode) -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
@@ -37,6 +38,8 @@ class NetOverlay(private val dens: Float) : Overlay() {
     private val edgePaint = stroke(Color.parseColor("#A63A5FD6"), 3f)
     private val routeCasing = stroke(Color.WHITE, 9f)
     private val routePaint = stroke(Color.parseColor("#F08A24"), 5.5f)
+    private val guideCasing = stroke(Color.WHITE, 9f)
+    private val guidePaint = stroke(Color.parseColor("#2563EB"), 5.5f)
     private val brokenPaint = stroke(Color.parseColor("#F08A24"), 4f).apply {
         pathEffect = DashPathEffect(floatArrayOf(14f * dens, 10f * dens), 0f)
     }
@@ -88,6 +91,12 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 addPath(pj, e.pts)
                 c.drawPath(path, edgePaint)
             }
+        }
+
+        if (guide.size >= 2) {
+            addPath(pj, guide)
+            c.drawPath(path, guideCasing)
+            c.drawPath(path, guidePaint)
         }
 
         for (leg in legs) {

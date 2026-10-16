@@ -265,3 +265,30 @@ object Overpass {
 
     fun cellFile(dir: File, y: Int, x: Int) = File(dir, "c20_${y}_${x}.json")
 }
+
+/** Fietsroute over echte wegen en fietspaden (BRouter), om naar het startpunt te leiden. */
+object Router {
+    fun route(from: GeoPoint, to: GeoPoint): List<GeoPoint>? {
+        try {
+            val url = "https://brouter.de/brouter?lonlats=" +
+                "${from.longitude},${from.latitude}%7C${to.longitude},${to.latitude}" +
+                "&profile=trekking&alternativeidx=0&format=geojson"
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.connectTimeout = 10000
+            c.readTimeout = 20000
+            c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
+            if (c.responseCode != 200) return null
+            val text = c.inputStream.bufferedReader().use { it.readText() }
+            val coords = JSONObject(text).getJSONArray("features").getJSONObject(0)
+                .getJSONObject("geometry").getJSONArray("coordinates")
+            val out = ArrayList<GeoPoint>(coords.length())
+            for (i in 0 until coords.length()) {
+                val c2 = coords.getJSONArray(i)
+                out.add(GeoPoint(c2.getDouble(1), c2.getDouble(0)))
+            }
+            return if (out.size >= 2) out else null
+        } catch (_: Exception) {
+            return null
+        }
+    }
+}

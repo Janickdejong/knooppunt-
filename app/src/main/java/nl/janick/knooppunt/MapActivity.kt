@@ -108,6 +108,11 @@ class MapActivity : Activity() {
     private lateinit var navArrow: TextView
     private var heading = -1f
     private var navFitted = false
+    private var mainTrack: Track? = null
+    private var guide: Track? = null
+    private var guideTarget: GeoPoint? = null
+    private var guideFetching = false
+    private var guideAttempt = 0L
 
     private var locationManager: LocationManager? = null
     private val locationListener = object : LocationListener {
@@ -423,7 +428,7 @@ class MapActivity : Activity() {
         }
         if (navigating) {
             updateNavigation(here)
-            if (!wasOffRoute) map.controller.animateTo(here)
+            if (!wasOffRoute || guide != null) map.controller.animateTo(here)
         }
         map.invalidate()
     }
@@ -653,6 +658,7 @@ class MapActivity : Activity() {
         val cum = DoubleArray(pts.size)
         for (i in 1 until pts.size) cum[i] = cum[i - 1] + pts[i - 1].distanceToAsDouble(pts[i])
         navPts = pts
+        mainTrack = Track(pts, false)
         navCum = cum
         navNodeIdx = idx
         navProgress = 0
@@ -666,6 +672,7 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        clearGuide()
         navFitted = false
         heading = -1f
         navProgress = 0
@@ -688,6 +695,7 @@ class MapActivity : Activity() {
 
     private fun stopNavigation() {
         navigating = false
+        clearGuide()
         overlay.nextId = -1L
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
@@ -761,33 +769,104 @@ class MapActivity : Activity() {
         val remaining = navCum[navCum.size - 1] - navCum[navProgress]
         val toNext = navCum[navNodeIdx[k]] - navCum[navProgress]
         val then = if (k + 1 < routeNodes.size) "Daarna ${routeNodes[k + 1].ref}" else "Dit is het laatste knooppunt"
-        val target: GeoPoint
-        if (toStart) {
-            target = navPts[0]
-            overlay.nextId = routeNodes[0].id
-            showNavigation(routeNodes[0].ref, formatDistance(here.distanceToAsDouble(target)), "Ga hierheen om te beginnen", false)
-            navTotal.text = "Route: ${formatKm(totalLength())}"
-            if (!navFitted) {
-                navFitted = true
-                fitTo(here, target)
+        val aim: GeoPoint
+        if (toStart || off) {
+            val goal = if (toStart) navPts[0] else navPts[best]
+            ensureGuide(here, goal)
+            val g = guide
+            val label = if (toStart) "Ga hierheen om te beginnen" else "${formatDistance(bestDist)} verder"
+            if (g != null) {
+                val dg = g.locate(here)
+                val left = g.remaining() + dg
+                val hint = turnText(g.turnAhead())
+                if (toStart) {
+                    overlay.nextId = routeNodes[0].id
+                    showNavigation(routeNodes[0].ref, formatDistance(left), hint ?: "Volg de blauwe lijn naar het startpunt", false)
+                    navTotal.text = "Route: ${formatKm(totalLength())}"
+                } else {
+                    overlay.nextId = next.id
+                    showNavigation(next.ref, "Terug naar de route", hint ?: "${formatDistance(left)} verder", true)
+                    navTotal.text = "Nog ${formatKm(remaining)}"
+                }
+                aim = g.aim()
+            } else {
+                val searching = if (guideFetching) "Route naar het startpunt zoeken\u2026" else label
+                if (toStart) {
+                    overlay.nextId = routeNodes[0].id
+                    showNavigation(routeNodes[0].ref, formatDistance(here.distanceToAsDouble(goal)), searching, false)
+                    navTotal.text = "Route: ${formatKm(totalLength())}"
+                    if (!navFitted) {
+                        navFitted = true
+                        fitTo(here, goal)
+                    }
+                } else {
+                    overlay.nextId = next.id
+                    showNavigation(next.ref, "Terug naar de route", searching, true)
+                    navTotal.text = "Nog ${formatKm(remaining)}"
+                    if (justOff) fitTo(here, goal)
+                }
+                aim = goal
             }
-        } else if (off) {
-            target = navPts[best]
-            overlay.nextId = next.id
-            showNavigation(next.ref, "Terug naar de route", "${formatDistance(bestDist)} verder", true)
-            navTotal.text = "Nog ${formatKm(remaining)}"
-            if (justOff) fitTo(here, target)
         } else {
-            target = navPts[min(navPts.size - 1, navProgress + 8)]
+            if (guide != null) {
+                clearGuide()
+                map.controller.setZoom(17.0)
+            }
+            aim = navPts[min(navPts.size - 1, navProgress + 8)]
             overlay.nextId = next.id
-            showNavigation(next.ref, formatDistance(toNext), then, false)
-            navTotal.text = "Nog ${formatKm(remaining)}"
-            if (justBack) map.controller.setZoom(17.0)
+            val hint = turnText(mainTrack?.also { it.progress = navProgress }?.turnAhead())
+            val afterNext = if (k + 1 < routeNodes.size) routeNodes[k + 1].ref else null
+            if (hint != null) {
+                showNavigation(next.ref, formatDistance(toNext), hint, false)
+                navTotal.text = "Nog ${formatKm(remaining)}" + (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
+            } else {
+                showNavigation(next.ref, formatDistance(toNext), then, false)
+                navTotal.text = "Nog ${formatKm(remaining)}"
+            }
         }
 
-        val bearing = here.bearingTo(target).toFloat()
+        val bearing = here.bearingTo(aim).toFloat()
         navArrow.rotation = if (heading >= 0f) bearing - heading else bearing
         navArrow.visibility = View.VISIBLE
+    }
+
+    private fun turnText(turn: Pair<Double, Int>?): String? {
+        if (turn == null) return null
+        val word = if (turn.second > 0) "rechtsaf" else "linksaf"
+        return if (turn.first < 25) "Nu $word" else "Over ${formatDistance(turn.first)} $word"
+    }
+
+    private fun clearGuide() {
+        guide = null
+        guideTarget = null
+        overlay.guide = emptyList()
+    }
+
+    /** Haalt, als dat nodig is, een fietsroute op van je plek naar het doel. */
+    private fun ensureGuide(here: GeoPoint, goal: GeoPoint) {
+        val g = guide
+        val now = System.currentTimeMillis()
+        val stale = g == null ||
+            (guideTarget?.distanceToAsDouble(goal) ?: 1e9) > 150.0 ||
+            g.locate(here) > 60.0
+        if (!stale || guideFetching || now - guideAttempt < 15000) return
+        guideFetching = true
+        guideAttempt = now
+        io.execute {
+            val pts = Router.route(here, goal)
+            ui.post {
+                guideFetching = false
+                if (pts != null && navigating) {
+                    guide = Track(pts)
+                    guideTarget = goal
+                    overlay.guide = pts
+                    map.controller.setZoom(16.0)
+                    map.controller.setCenter(here)
+                    me?.let { updateNavigation(it) }
+                    map.invalidate()
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- opslaan en delen
