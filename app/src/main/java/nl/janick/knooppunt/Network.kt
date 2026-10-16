@@ -234,30 +234,41 @@ object Overpass {
             "(node[\"rcn_ref\"]($box);" +
             "relation[\"route\"=\"bicycle\"][\"network\"=\"rcn\"]($box););" +
             "out geom;"
-        for (offset in servers.indices) {
-            val index = (preferred + offset) % servers.size
-            val server = servers[index]
-            try {
-                val c = URL(server).openConnection() as HttpURLConnection
-                c.requestMethod = "POST"
-                c.doOutput = true
-                c.connectTimeout = 8000
-                c.readTimeout = 30000
-                c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
-                c.outputStream.use { it.write(("data=" + URLEncoder.encode(query, "UTF-8")).toByteArray()) }
-                val code = c.responseCode
-                if (code == 200) {
-                    val text = c.inputStream.bufferedReader().use { it.readText() }
-                    if (text.contains("\"elements\"") && !text.contains("runtime error")) {
-                        preferred = index
-                        return text
+        val body = ("data=" + URLEncoder.encode(query, "UTF-8")).toByteArray()
+        // Twee rondes langs de servers; een drukke server is vaak een paar seconden later weer vrij.
+        for (round in 0 until 2) {
+            for (offset in servers.indices) {
+                val index = (preferred + offset) % servers.size
+                val server = servers[index]
+                try {
+                    val c = URL(server).openConnection() as HttpURLConnection
+                    c.requestMethod = "POST"
+                    c.doOutput = true
+                    c.connectTimeout = 8000
+                    c.readTimeout = 30000
+                    c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
+                    c.outputStream.use { it.write(body) }
+                    val code = c.responseCode
+                    if (code == 200) {
+                        val text = c.inputStream.bufferedReader().use { it.readText() }
+                        if (text.contains("\"elements\"") && !text.contains("runtime error")) {
+                            preferred = index
+                            return text
+                        }
+                        lastError = "onvolledig antwoord"
+                    } else {
+                        lastError = "melding $code"
                     }
-                    lastError = "server gaf onvolledig antwoord"
-                } else {
-                    lastError = "server meldt $code"
+                } catch (e: Exception) {
+                    lastError = e.javaClass.simpleName
                 }
-            } catch (e: Exception) {
-                lastError = e.javaClass.simpleName
+            }
+            if (round == 0) {
+                try {
+                    Thread.sleep(2500)
+                } catch (_: InterruptedException) {
+                    return null
+                }
             }
         }
         return null

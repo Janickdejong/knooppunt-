@@ -75,6 +75,7 @@ class MapActivity : Activity() {
     private var pending = 0
     private var batchTotal = 0
     private var batchDone = 0
+    private var retries = 0
 
     // Route.
     private val routeIds = ArrayList<Long>()
@@ -537,12 +538,21 @@ class MapActivity : Activity() {
             batchDone += 1
             if (built != null) {
                 overlay.net = built
+                retries = 0
                 rebuildRoute()
                 map.invalidate()
                 setStatus(if (pending == 0) "" else "Knooppunten laden… $batchDone/$batchTotal")
             } else {
                 requested.remove("$y/$x")
-                setStatus("Laden mislukt (" + Overpass.lastError + "). Beweeg de kaart om opnieuw te proberen.")
+                if (retries < MAX_RETRIES) {
+                    retries += 1
+                    setStatus("De kaartserver is druk (" + Overpass.lastError + "), nieuwe poging $retries/$MAX_RETRIES\u2026")
+                    ui.removeCallbacks(loadRunnable)
+                    ui.postDelayed(loadRunnable, 6000)
+                } else {
+                    setStatus("Laden mislukt (" + Overpass.lastError + "). Beweeg de kaart om het opnieuw te proberen.")
+                    retries = 0
+                }
             }
         }
     }
@@ -1099,5 +1109,6 @@ class MapActivity : Activity() {
         private const val REQ_GPX = 2
         private const val OFF_ROUTE_METERS = 40.0
         private const val CELLS = 20.0
+        private const val MAX_RETRIES = 5
     }
 }
