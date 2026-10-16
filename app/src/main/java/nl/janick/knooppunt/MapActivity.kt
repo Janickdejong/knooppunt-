@@ -17,6 +17,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
@@ -41,10 +44,13 @@ import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -103,13 +109,19 @@ class MapActivity : Activity() {
     private lateinit var bottomBar: LinearLayout
     private lateinit var startButton: TextView
     private lateinit var navCard: LinearLayout
-    private lateinit var navBadge: TextView
-    private lateinit var navDistance: TextView
-    private lateinit var navThen: TextView
-    private lateinit var navTotal: TextView
+    private lateinit var navIcon: TurnArrowView
+    private lateinit var navBig: TextView
+    private lateinit var navLine: TextView
+    private lateinit var navNodeBadge: TextView
+    private lateinit var navNodeText: TextView
+    private lateinit var navBar: LinearLayout
+    private lateinit var etaMain: TextView
+    private lateinit var etaSub: TextView
+    private lateinit var speedView: TextView
     private lateinit var locateButton: TextView
-    private lateinit var navArrow: TextView
     private var heading = -1f
+    private var smoothHeading = 0f
+    private var avgSpeed = 0.0
     private var navFitted = false
     private var mainTrack: Track? = null
     private var guide: Track? = null
@@ -214,84 +226,127 @@ class MapActivity : Activity() {
             setMargins(dp(12), dp(12), dp(12), 0)
         })
 
-        // Navigatiekaart, pas zichtbaar tijdens het fietsen.
+        // Navigatiekaart bovenin: bocht, afstand en volgend knooppunt.
         navCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(night, 20)
             elevation = dp(8).toFloat()
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(16), dp(14), dp(16), dp(12))
             visibility = View.GONE
         }
         val navTop = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        navBadge = TextView(this).apply {
-            textSize = 38f
+        navIcon = TurnArrowView(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(mint)
+            }
+        }
+        navTop.addView(navIcon, LinearLayout.LayoutParams(dp(84), dp(84)))
+        val navText = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), 0, 0, 0)
+        }
+        navBig = TextView(this).apply {
+            textSize = 42f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }
+        navLine = TextView(this).apply {
+            textSize = 19f
+            setTextColor(mint)
+        }
+        navText.addView(navBig)
+        navText.addView(navLine)
+        navTop.addView(navText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        navCard.addView(navTop)
+        val nodeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        navNodeBadge = TextView(this).apply {
+            textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.BLACK)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.WHITE)
-                setStroke(dp(5), mint)
+                setStroke(dp(2), mint)
             }
         }
-        navTop.addView(navBadge, LinearLayout.LayoutParams(dp(92), dp(92)))
-        val navText = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), 0, 0, 0)
-        }
-        navDistance = TextView(this).apply {
-            textSize = 34f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-        }
-        navThen = TextView(this).apply {
-            textSize = 17f
-            setTextColor(mint)
-        }
-        navText.addView(navDistance)
-        navText.addView(navThen)
-        navTop.addView(navText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        navArrow = TextView(this).apply {
-            text = "\u25B2"
-            textSize = 26f
-            gravity = Gravity.CENTER
-            setTextColor(night)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(mint)
-            }
-            visibility = View.GONE
-        }
-        navTop.addView(navArrow, LinearLayout.LayoutParams(dp(64), dp(64)))
-        navCard.addView(navTop)
-        val navBottom = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, 0)
-        }
-        navTotal = TextView(this).apply {
+        nodeRow.addView(navNodeBadge, LinearLayout.LayoutParams(dp(36), dp(36)))
+        navNodeText = TextView(this).apply {
             textSize = 15f
-            setTextColor(Color.parseColor("#93A3B8"))
+            setTextColor(Color.parseColor("#B7C3D4"))
+            setPadding(dp(12), 0, 0, 0)
         }
-        navBottom.addView(navTotal, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val stop = TextView(this).apply {
-            text = "Stop"
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            background = rounded(Color.parseColor("#2B3A52"), 14)
-            setPadding(dp(22), dp(10), dp(22), dp(10))
-            setOnClickListener { stopNavigation() }
-        }
-        navBottom.addView(stop)
-        navCard.addView(navBottom)
+        nodeRow.addView(navNodeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        navCard.addView(nodeRow)
         root.addView(navCard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.TOP
             setMargins(dp(12), dp(12), dp(12), 0)
+        })
+
+        // Onderbalk tijdens het fietsen: resterende tijd, afstand, aankomst en stoppen.
+        navBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(night, 20)
+            elevation = dp(8).toFloat()
+            setPadding(dp(20), dp(14), dp(16), dp(14))
+            visibility = View.GONE
+        }
+        val etaColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        etaMain = TextView(this).apply {
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }
+        etaSub = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.parseColor("#93A3B8"))
+        }
+        etaColumn.addView(etaMain)
+        etaColumn.addView(etaSub)
+        navBar.addView(etaColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val stop = TextView(this).apply {
+            text = "Stop"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = rounded(Color.parseColor("#C0392B"), 16)
+            setPadding(dp(26), dp(12), dp(26), dp(12))
+            setOnClickListener { stopNavigation() }
+        }
+        navBar.addView(stop)
+        root.addView(navBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.BOTTOM
+            setMargins(dp(8), 0, dp(8), dp(8))
+        })
+
+        // Snelheid, links onderin.
+        speedView = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.WHITE)
+                setStroke(dp(2), Color.parseColor("#D9D5CD"))
+            }
+            elevation = dp(6).toFloat()
+            text = "0"
+            visibility = View.GONE
+        }
+        root.addView(speedView, FrameLayout.LayoutParams(dp(72), dp(72)).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            setMargins(dp(14), 0, 0, dp(100))
         })
 
         // Onderbalk met knoppen.
@@ -446,10 +501,51 @@ class MapActivity : Activity() {
             scheduleLoad()
         }
         if (navigating) {
+            if (location.hasSpeed() && location.speed > 1.5f) {
+                avgSpeed = if (avgSpeed == 0.0) location.speed.toDouble() else avgSpeed * 0.9 + location.speed * 0.1
+            }
             updateNavigation(here)
-            if (!wasOffRoute || guide != null) map.controller.animateTo(here)
+            updateSpeed(location)
+            followMe(here)
         }
         map.invalidate()
+    }
+
+    private fun updateSpeed(location: Location) {
+        if (!location.hasSpeed()) return
+        val kmh = (location.speed * 3.6f).roundToInt()
+        val text = "$kmh\nkm/u"
+        val span = SpannableString(text)
+        span.setSpan(RelativeSizeSpan(0.5f), text.indexOf('\n'), text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        speedView.text = span
+    }
+
+    /** De kaart draait mee met je rijrichting en jij staat lager in beeld, zoals in een autonavigatie. */
+    private fun followMe(here: GeoPoint) {
+        if (wasOffRoute && guide == null) return
+        if (heading < 0f) {
+            map.controller.animateTo(here)
+            return
+        }
+        var d = heading - smoothHeading
+        while (d > 180f) d -= 360f
+        while (d < -180f) d += 360f
+        smoothHeading = (smoothHeading + d * 0.4f + 360f) % 360f
+        map.mapOrientation = -smoothHeading
+        overlay.meHeading = smoothHeading
+
+        val pj = map.projection
+        val p0 = android.graphics.Point()
+        val p1 = android.graphics.Point()
+        pj.toPixels(here, p0)
+        pj.toPixels(here.destinationPoint(100.0, 0.0), p1)
+        val px = hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble())
+        if (px > 0.5) {
+            val meters = map.height * 0.22 * (100.0 / px)
+            map.controller.animateTo(here.destinationPoint(meters, smoothHeading.toDouble()))
+        } else {
+            map.controller.animateTo(here)
+        }
     }
 
     private fun goToMe() {
@@ -652,11 +748,13 @@ class MapActivity : Activity() {
     private fun updateMode() {
         bottomBar.visibility = if (navigating) View.GONE else View.VISIBLE
         navCard.visibility = if (navigating) View.VISIBLE else View.GONE
+        navBar.visibility = if (navigating) View.VISIBLE else View.GONE
+        speedView.visibility = if (navigating) View.VISIBLE else View.GONE
         findTopCard().visibility = if (navigating) View.GONE else View.VISIBLE
         startButton.visibility = if (!navigating && legs.isNotEmpty()) View.VISIBLE else View.GONE
         overlay.navigating = navigating
         val lp = locateButton.layoutParams as FrameLayout.LayoutParams
-        lp.bottomMargin = if (navigating) dp(24) else if (legs.isNotEmpty()) dp(150) else dp(100)
+        lp.bottomMargin = if (navigating) dp(100) else if (legs.isNotEmpty()) dp(150) else dp(100)
         locateButton.layoutParams = lp
     }
 
@@ -709,6 +807,8 @@ class MapActivity : Activity() {
         clearGuide()
         navFitted = false
         heading = -1f
+        smoothHeading = 0f
+        avgSpeed = 0.0
         navProgress = 0
         navNext = -1
         wasOffRoute = false
@@ -721,8 +821,9 @@ class MapActivity : Activity() {
             updateNavigation(here)
         } else {
             map.controller.setCenter(routeNodes.first().pos)
-            showNavigation(routeNodes.getOrNull(1)?.ref ?: "", "Wachten op GPS…", "", false)
-            navArrow.visibility = View.GONE
+            renderNav(TurnArrowView.POINTER, 0f, "GPS\u2026", "Wachten op je locatie", routeNodes.first().ref, "", false)
+            etaMain.text = formatKm(totalLength())
+            etaSub.text = "Route"
         }
         map.invalidate()
     }
@@ -730,19 +831,46 @@ class MapActivity : Activity() {
     private fun stopNavigation() {
         navigating = false
         clearGuide()
+        map.mapOrientation = 0f
+        overlay.meHeading = Float.NaN
         overlay.nextId = -1L
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
         map.invalidate()
     }
 
-    private fun showNavigation(badge: String, distance: String, then: String, off: Boolean) {
-        navBadge.text = badge
-        navBadge.textSize = if (badge.length > 2) 30f else 38f
-        navDistance.text = distance
-        navDistance.textSize = if (distance.length > 9) 24f else 34f
-        navThen.text = then
+    private fun renderNav(mode: Int, angle: Float, big: String, line: String, nodeRef: String, nodeText: String, off: Boolean) {
+        navIcon.set(mode, angle)
+        navBig.text = big
+        navBig.textSize = if (big.length > 8) 28f else 42f
+        navLine.text = line
+        navNodeBadge.text = nodeRef
+        navNodeBadge.textSize = if (nodeRef.length > 2) 12f else 15f
+        navNodeText.text = nodeText
         navCard.background = rounded(if (off) warn else night, 20)
+    }
+
+    /** Bocht of rechtdoor: symbool, grote afstand en een regel eronder. */
+    private fun maneuver(turn: Pair<Double, Int>?, toTarget: Double, straight: String): Triple<Int, String, String> {
+        if (turn == null) return Triple(TurnArrowView.STRAIGHT, formatDistance(toTarget), straight)
+        val word = if (turn.second > 0) "Rechtsaf" else "Linksaf"
+        val mode = if (turn.second > 0) TurnArrowView.RIGHT else TurnArrowView.LEFT
+        return Triple(mode, if (turn.first < 25) "Nu" else formatDistance(turn.first), word)
+    }
+
+    private fun relativeBearing(here: GeoPoint, goal: GeoPoint): Float {
+        val b = here.bearingTo(goal).toFloat()
+        return if (heading >= 0f) b - heading else b
+    }
+
+    private fun updateEta(meters: Double) {
+        val v = if (avgSpeed > 2.5) min(max(avgSpeed, 2.8), 8.0) else 16.0 / 3.6
+        val secs = meters / v
+        val minutes = ceil(secs / 60.0).toInt()
+        etaMain.text = if (minutes >= 60) "${minutes / 60} u ${minutes % 60} min" else "$minutes min"
+        val arrive = Calendar.getInstance().apply { add(Calendar.SECOND, secs.toInt()) }
+        val clock = String.format(Locale("nl", "NL"), "%02d:%02d", arrive.get(Calendar.HOUR_OF_DAY), arrive.get(Calendar.MINUTE))
+        etaSub.text = formatKm(meters) + " \u00B7 aankomst " + clock
     }
 
     private fun fitTo(a: GeoPoint, b: GeoPoint) {
@@ -787,87 +915,60 @@ class MapActivity : Activity() {
             navNext = k
         }
         val justOff = off && !wasOffRoute
-        val justBack = !off && wasOffRoute
         if (justOff && !toStart) map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         wasOffRoute = off
 
         if (k >= routeNodes.size) {
             overlay.nextId = -1L
-            navArrow.visibility = View.GONE
-            showNavigation("\u2713", "Aangekomen", "Je bent bij ${routeNodes.last().ref}", false)
-            navTotal.text = ""
+            renderNav(TurnArrowView.ARRIVED, 0f, "Aangekomen", "Je bent bij ${routeNodes.last().ref}", routeNodes.last().ref, "", false)
+            etaMain.text = "Klaar"
+            etaSub.text = formatKm(totalLength())
             return
         }
 
         val next = routeNodes[k]
         val remaining = navCum[navCum.size - 1] - navCum[navProgress]
         val toNext = navCum[navNodeIdx[k]] - navCum[navProgress]
-        val then = if (k + 1 < routeNodes.size) "Daarna ${routeNodes[k + 1].ref}" else "Dit is het laatste knooppunt"
-        val aim: GeoPoint
+        val afterNext = if (k + 1 < routeNodes.size) routeNodes[k + 1].ref else null
+        var remainingAll = remaining
+
         if (toStart || off) {
             val goal = if (toStart) navPts[0] else navPts[best]
+            val goalNode = if (toStart) routeNodes[0] else next
             ensureGuide(here, goal)
             val g = guide
-            val label = if (toStart) "Ga hierheen om te beginnen" else "${formatDistance(bestDist)} verder"
+            overlay.nextId = goalNode.id
+            val what = if (toStart) "Startpunt" else "Terug naar de route"
             if (g != null) {
-                val dg = g.locate(here)
-                val left = g.remaining() + dg
-                val hint = turnText(g.turnAhead())
-                if (toStart) {
-                    overlay.nextId = routeNodes[0].id
-                    showNavigation(routeNodes[0].ref, formatDistance(left), hint ?: "Volg de blauwe lijn naar het startpunt", false)
-                    navTotal.text = "Route: ${formatKm(totalLength())}"
-                } else {
-                    overlay.nextId = next.id
-                    showNavigation(next.ref, "Terug naar de route", hint ?: "${formatDistance(left)} verder", true)
-                    navTotal.text = "Nog ${formatKm(remaining)}"
-                }
-                aim = g.aim()
+                val left = g.remaining() + g.locate(here)
+                val m = maneuver(g.turnAhead(), left, if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
+                renderNav(m.first, 0f, m.second, m.third, goalNode.ref, "$what \u00B7 ${formatDistance(left)}", !toStart)
+                remainingAll = if (toStart) left + navCum[navCum.size - 1] else left + remaining
             } else {
-                val searching = if (guideFetching) "Route naar het startpunt zoeken\u2026" else label
-                if (toStart) {
-                    overlay.nextId = routeNodes[0].id
-                    showNavigation(routeNodes[0].ref, formatDistance(here.distanceToAsDouble(goal)), searching, false)
-                    navTotal.text = "Route: ${formatKm(totalLength())}"
-                    if (!navFitted) {
-                        navFitted = true
-                        fitTo(here, goal)
-                    }
-                } else {
-                    overlay.nextId = next.id
-                    showNavigation(next.ref, "Terug naar de route", searching, true)
-                    navTotal.text = "Nog ${formatKm(remaining)}"
-                    if (justOff) fitTo(here, goal)
+                val straight = here.distanceToAsDouble(goal)
+                val line = if (guideFetching) "Route zoeken\u2026" else "Ga in deze richting"
+                renderNav(TurnArrowView.POINTER, relativeBearing(here, goal), formatDistance(straight), line, goalNode.ref, "$what \u00B7 ${formatDistance(straight)}", !toStart)
+                remainingAll = (if (toStart) navCum[navCum.size - 1] else remaining) + straight
+                if (toStart && !navFitted) {
+                    navFitted = true
+                    fitTo(here, goal)
+                } else if (!toStart && justOff) {
+                    fitTo(here, goal)
                 }
-                aim = goal
             }
         } else {
             if (guide != null) {
                 clearGuide()
                 map.controller.setZoom(17.0)
             }
-            aim = navPts[min(navPts.size - 1, navProgress + 8)]
             overlay.nextId = next.id
-            val hint = turnText(mainTrack?.also { it.progress = navProgress }?.turnAhead())
-            val afterNext = if (k + 1 < routeNodes.size) routeNodes[k + 1].ref else null
-            if (hint != null) {
-                showNavigation(next.ref, formatDistance(toNext), hint, false)
-                navTotal.text = "Nog ${formatKm(remaining)}" + (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
-            } else {
-                showNavigation(next.ref, formatDistance(toNext), then, false)
-                navTotal.text = "Nog ${formatKm(remaining)}"
-            }
+            mainTrack?.progress = navProgress
+            val m = maneuver(mainTrack?.turnAhead(), toNext, "Rechtdoor")
+            val nodeText = "${formatDistance(toNext)} naar knooppunt ${next.ref}" +
+                (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
+            renderNav(m.first, 0f, m.second, m.third, next.ref, nodeText, false)
         }
-
-        val bearing = here.bearingTo(aim).toFloat()
-        navArrow.rotation = if (heading >= 0f) bearing - heading else bearing
-        navArrow.visibility = View.VISIBLE
-    }
-
-    private fun turnText(turn: Pair<Double, Int>?): String? {
-        if (turn == null) return null
-        val word = if (turn.second > 0) "rechtsaf" else "linksaf"
-        return if (turn.first < 25) "Nu $word" else "Over ${formatDistance(turn.first)} $word"
+        updateEta(remainingAll)
     }
 
     private fun clearGuide() {

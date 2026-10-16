@@ -20,6 +20,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var me: GeoPoint? = null
     var navigating = false
     var nextId: Long = -1L
+    var meHeading: Float = Float.NaN
     var guide: List<GeoPoint> = emptyList()
     var onNodeTap: ((KNode) -> Unit)? = null
 
@@ -54,6 +55,13 @@ class NetOverlay(private val dens: Float) : Overlay() {
     }
     private val meFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2563EB") }
     private val meRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val arrowOutline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL_AND_STROKE
+        strokeWidth = 5f * dens
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val arrowPath = Path()
 
     private fun addPath(pj: org.osmdroid.views.Projection, pts: List<GeoPoint>) {
         path.rewind()
@@ -146,8 +154,25 @@ class NetOverlay(private val dens: Float) : Overlay() {
         val m = me
         if (m != null) {
             pj.toPixels(m, tmp)
-            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 11f * dens, meRing)
-            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 8f * dens, meFill)
+            val h = meHeading
+            if (navigating && !h.isNaN()) {
+                // Pijl in rijrichting, zoals in een autonavigatie.
+                arrowPath.rewind()
+                arrowPath.moveTo(0f, -17f * dens)
+                arrowPath.lineTo(12f * dens, 13f * dens)
+                arrowPath.lineTo(0f, 6f * dens)
+                arrowPath.lineTo(-12f * dens, 13f * dens)
+                arrowPath.close()
+                c.save()
+                c.translate(tmp.x.toFloat(), tmp.y.toFloat())
+                c.rotate(h + osmv.mapOrientation)
+                c.drawPath(arrowPath, arrowOutline)
+                c.drawPath(arrowPath, meFill)
+                c.restore()
+            } else {
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 11f * dens, meRing)
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 8f * dens, meFill)
+            }
         }
     }
 
