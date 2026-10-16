@@ -80,8 +80,17 @@ class Network(val nodes: Map<Long, KNode>, val edges: List<KEdge>) {
     }
 }
 
-object NetworkBuilder {
+/** Bouwt het netwerk stap voor stap op: nieuwe vakjes komen erbij zonder dat alles opnieuw wordt berekend. */
+class NetworkBuilder {
+    private class Link(val refA: String, val refB: String, val ways: List<List<GeoPoint>>)
+
     private val linkRegex = Regex("""(\d{1,3})\s*[-–>]+\s*(\d{1,3})""")
+    private val nodes = HashMap<Long, KNode>()
+    private val byRef = HashMap<String, MutableList<KNode>>()
+    private val edges = ArrayList<KEdge>()
+    private val seenRelations = HashSet<Long>()
+    // Verbindingen waarvan een knooppunt nog in een vakje ligt dat niet geladen is.
+    private val unlinked = ArrayList<Link>()
 
     private fun norm(ref: String): String = ref.trim().trimStart('0').ifEmpty { "0" }
 
@@ -122,7 +131,8 @@ object NetworkBuilder {
         var bestDist = 300.0
         for (n in candidates) {
             for (w in ways) {
-                for (p in w) {
+                // Een knooppunt ligt aan het begin of eind van een stuk route.
+                for (p in listOf(w.first(), w.last())) {
                     val d = n.pos.distanceToAsDouble(p)
                     if (d < bestDist) { bestDist = d; best = n }
                 }
@@ -131,91 +141,117 @@ object NetworkBuilder {
         return best
     }
 
-    fun build(rawNodes: Collection<JSONObject>, rawRelations: Collection<JSONObject>): Network {
-        val nodes = HashMap<Long, KNode>()
-        val byRef = HashMap<String, MutableList<KNode>>()
+    /** true = klaar met deze verbinding (gelukt of niet bruikbaar), false = later opnieuw proberen. */
+    private fun tryLink(link: Link): Boolean {
+        val a = nearest(byRef[link.refA], link.ways) ?: return false
+        val b = nearest(byRef[link.refB], link.ways) ?: return false
+        if (a.id == b.id) return true
+        val chained = chain(link.ways, a.pos)
+        if (chained.size < 2) return true
+        val pts = ArrayList<GeoPoint>(chained.size + 2)
+        pts.add(a.pos)
+        pts.addAll(chained)
+        pts.add(b.pos)
+        edges.add(KEdge(a, b, pts, lengthOf(pts)))
+        return true
+    }
+
+    private fun parse(rel: JSONObject): Link? {
+        val tags = rel.optJSONObject("tags") ?: return null
+        var text = tags.optString("ref")
+        if (!linkRegex.containsMatchIn(text)) text = tags.optString("name")
+        if (!linkRegex.containsMatchIn(text)) text = tags.optString("note")
+        val m = linkRegex.find(text) ?: return null
+        val refA = norm(m.groupValues[1])
+        val refB = norm(m.groupValues[2])
+        if (refA == refB) return null
+        val members = rel.optJSONArray("members") ?: return null
+        val ways = ArrayList<List<GeoPoint>>()
+        for (i in 0 until members.length()) {
+            val member = members.optJSONObject(i) ?: continue
+            if (member.optString("type") != "way") continue
+            val geometry = member.optJSONArray("geometry") ?: continue
+            val pts = ArrayList<GeoPoint>()
+            for (j in 0 until geometry.length()) {
+                val g = geometry.optJSONObject(j) ?: continue
+                pts.add(GeoPoint(g.optDouble("lat"), g.optDouble("lon")))
+            }
+            if (pts.size >= 2) ways.add(pts)
+        }
+        if (ways.isEmpty()) return null
+        return Link(refA, refB, ways)
+    }
+
+    fun add(rawNodes: List<JSONObject>, rawRelations: List<JSONObject>) {
+        var newNodes = false
         for (raw in rawNodes) {
+            val id = raw.optLong("id")
+            if (nodes.containsKey(id)) continue
             val tags = raw.optJSONObject("tags") ?: continue
             val ref = tags.optString("rcn_ref")
             if (ref.isEmpty()) continue
             val lat = raw.optDouble("lat", Double.NaN)
             val lon = raw.optDouble("lon", Double.NaN)
             if (lat.isNaN() || lon.isNaN()) continue
-            val node = KNode(raw.optLong("id"), ref, GeoPoint(lat, lon))
-            nodes[node.id] = node
+            val node = KNode(id, ref, GeoPoint(lat, lon))
+            nodes[id] = node
             byRef.getOrPut(norm(ref)) { ArrayList() }.add(node)
+            newNodes = true
         }
-
-        val edges = ArrayList<KEdge>()
         for (rel in rawRelations) {
-            val tags = rel.optJSONObject("tags") ?: continue
-            var text = tags.optString("ref")
-            if (!linkRegex.containsMatchIn(text)) text = tags.optString("name")
-            if (!linkRegex.containsMatchIn(text)) text = tags.optString("note")
-            val m = linkRegex.find(text) ?: continue
-            val refA = norm(m.groupValues[1])
-            val refB = norm(m.groupValues[2])
-            if (refA == refB) continue
-
-            val members = rel.optJSONArray("members") ?: continue
-            val ways = ArrayList<List<GeoPoint>>()
-            for (i in 0 until members.length()) {
-                val member = members.optJSONObject(i) ?: continue
-                if (member.optString("type") != "way") continue
-                val geometry = member.optJSONArray("geometry") ?: continue
-                val pts = ArrayList<GeoPoint>()
-                for (j in 0 until geometry.length()) {
-                    val g = geometry.optJSONObject(j) ?: continue
-                    pts.add(GeoPoint(g.optDouble("lat"), g.optDouble("lon")))
-                }
-                if (pts.size >= 2) ways.add(pts)
-            }
-            if (ways.isEmpty()) continue
-
-            val a = nearest(byRef[refA], ways) ?: continue
-            val b = nearest(byRef[refB], ways) ?: continue
-            if (a.id == b.id) continue
-
-            val chained = chain(ways, a.pos)
-            if (chained.size < 2) continue
-            val pts = ArrayList<GeoPoint>(chained.size + 2)
-            pts.add(a.pos)
-            pts.addAll(chained)
-            pts.add(b.pos)
-            edges.add(KEdge(a, b, pts, lengthOf(pts)))
+            val id = rel.optLong("id")
+            if (!seenRelations.add(id)) continue
+            val link = parse(rel) ?: continue
+            if (!tryLink(link)) unlinked.add(link)
         }
-        return Network(nodes, edges)
+        if (newNodes && unlinked.isNotEmpty()) {
+            val it = unlinked.iterator()
+            while (it.hasNext()) {
+                if (tryLink(it.next())) it.remove()
+            }
+        }
     }
+
+    fun snapshot(): Network = Network(HashMap(nodes), ArrayList(edges))
 }
 
 /** Haalt knooppuntgegevens op bij OpenStreetMap (Overpass) en bewaart ze per vakje op het toestel. */
 object Overpass {
     private val servers = listOf(
         "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter"
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter"
     )
+
+    // De server die het laatst werkte, probeert de app als eerste.
+    @Volatile private var preferred = 0
 
     @Volatile var lastError = ""
 
     fun fetch(south: Double, west: Double, north: Double, east: Double): String? {
         val box = "$south,$west,$north,$east"
-        val query = "[out:json][timeout:40];" +
+        val query = "[out:json][timeout:25];" +
             "(node[\"rcn_ref\"]($box);" +
             "relation[\"route\"=\"bicycle\"][\"network\"=\"rcn\"]($box););" +
             "out geom;"
-        for (server in servers) {
+        for (offset in servers.indices) {
+            val index = (preferred + offset) % servers.size
+            val server = servers[index]
             try {
                 val c = URL(server).openConnection() as HttpURLConnection
                 c.requestMethod = "POST"
                 c.doOutput = true
-                c.connectTimeout = 10000
-                c.readTimeout = 45000
+                c.connectTimeout = 8000
+                c.readTimeout = 30000
                 c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
                 c.outputStream.use { it.write(("data=" + URLEncoder.encode(query, "UTF-8")).toByteArray()) }
                 val code = c.responseCode
                 if (code == 200) {
                     val text = c.inputStream.bufferedReader().use { it.readText() }
-                    if (text.contains("\"elements\"") && !text.contains("runtime error")) return text
+                    if (text.contains("\"elements\"") && !text.contains("runtime error")) {
+                        preferred = index
+                        return text
+                    }
                     lastError = "server gaf onvolledig antwoord"
                 } else {
                     lastError = "server meldt $code"

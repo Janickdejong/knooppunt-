@@ -70,10 +70,11 @@ class MapActivity : Activity() {
     private val dataLock = Any()
 
     // Kaartgegevens; alleen aangeraakt op de achtergronddraad.
-    private val rawNodes = HashMap<Long, JSONObject>()
-    private val rawRelations = HashMap<Long, JSONObject>()
+    private val builder = NetworkBuilder()
     private val requested = HashSet<String>()
     private var pending = 0
+    private var batchTotal = 0
+    private var batchDone = 0
 
     // Route.
     private val routeIds = ArrayList<Long>()
@@ -473,8 +474,13 @@ class MapActivity : Activity() {
             if (pending == 0) setStatus("")
             return
         }
+        if (pending == 0) {
+            batchTotal = 0
+            batchDone = 0
+        }
         pending += todo.size
-        setStatus("Knooppunten laden…")
+        batchTotal += todo.size
+        setStatus("Knooppunten laden… $batchDone/$batchTotal")
         for ((y, x) in todo) {
             io.execute { loadCell(y, x) }
         }
@@ -503,15 +509,18 @@ class MapActivity : Activity() {
         if (text != null) {
             try {
                 val elements = JSONObject(text).optJSONArray("elements") ?: JSONArray()
-                synchronized(dataLock) {
-                    for (i in 0 until elements.length()) {
-                        val el = elements.optJSONObject(i) ?: continue
-                        when (el.optString("type")) {
-                            "node" -> rawNodes[el.optLong("id")] = el
-                            "relation" -> rawRelations[el.optLong("id")] = el
-                        }
+                val newNodes = ArrayList<JSONObject>()
+                val newRelations = ArrayList<JSONObject>()
+                for (i in 0 until elements.length()) {
+                    val el = elements.optJSONObject(i) ?: continue
+                    when (el.optString("type")) {
+                        "node" -> newNodes.add(el)
+                        "relation" -> newRelations.add(el)
                     }
-                    network = NetworkBuilder.build(rawNodes.values, rawRelations.values)
+                }
+                synchronized(dataLock) {
+                    builder.add(newNodes, newRelations)
+                    network = builder.snapshot()
                 }
             } catch (_: Exception) {
                 file.delete()
@@ -520,11 +529,12 @@ class MapActivity : Activity() {
         val built = network
         ui.post {
             pending -= 1
+            batchDone += 1
             if (built != null) {
                 overlay.net = built
                 rebuildRoute()
                 map.invalidate()
-                if (pending == 0) setStatus("")
+                setStatus(if (pending == 0) "" else "Knooppunten laden… $batchDone/$batchTotal")
             } else {
                 requested.remove("$y/$x")
                 setStatus("Laden mislukt (" + Overpass.lastError + "). Beweeg de kaart om opnieuw te proberen.")
