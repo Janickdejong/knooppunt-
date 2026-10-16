@@ -1,0 +1,44 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: APK bouwen
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log || {
+            # Fouten als korte meldingen tonen, zodat ze ook zonder volledig log leesbaar zijn.
+            grep -E "^e: |What went wrong|error:" -A2 build.log | head -30 | while IFS= read -r regel; do
+              echo "::error::$regel"
+            done
+            exit 1
+          }
+
+      - name: APK klaarzetten als download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk Knooppunt.apk
+          gh release create "build-${{ github.run_number }}" Knooppunt.apk --title "Knooppunt ${{ github.run_number }}" --notes "Download Knooppunt.apk en installeer hem. Updates gaan over de vorige versie heen; je opgeslagen routes blijven staan."

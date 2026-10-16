@@ -1,0 +1,156 @@
+package nl.janick.knooppunt
+
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Point
+import android.graphics.Typeface
+import android.view.MotionEvent
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Overlay
+
+/** Tekent de fietsknooppunten, de verbindingen ertussen en de gekozen route. */
+class NetOverlay(private val dens: Float) : Overlay() {
+    @Volatile var net: Network? = null
+    var routeIds: Set<Long> = emptySet()
+    var legs: List<Leg> = emptyList()
+    var me: GeoPoint? = null
+    var navigating = false
+    var onNodeTap: ((KNode) -> Unit)? = null
+
+    private val green = Color.parseColor("#1B6B3A")
+    private val path = Path()
+    private val tmp = Point()
+
+    private fun stroke(color: Int, widthDp: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        this.color = color
+        style = Paint.Style.STROKE
+        strokeWidth = widthDp * dens
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    private val edgePaint = stroke(Color.parseColor("#A63A5FD6"), 3f)
+    private val routeCasing = stroke(Color.WHITE, 9f)
+    private val routePaint = stroke(Color.parseColor("#F08A24"), 5.5f)
+    private val brokenPaint = stroke(Color.parseColor("#F08A24"), 4f).apply {
+        pathEffect = DashPathEffect(floatArrayOf(14f * dens, 10f * dens), 0f)
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = green
+    }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    private val meFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2563EB") }
+    private val meRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+
+    private fun addPath(pj: org.osmdroid.views.Projection, pts: List<GeoPoint>) {
+        path.rewind()
+        var first = true
+        for (p in pts) {
+            pj.toPixels(p, tmp)
+            if (first) {
+                path.moveTo(tmp.x.toFloat(), tmp.y.toFloat())
+                first = false
+            } else {
+                path.lineTo(tmp.x.toFloat(), tmp.y.toFloat())
+            }
+        }
+    }
+
+    private fun radiusDp(zoom: Double): Float = when {
+        zoom >= 15.0 -> 17f
+        zoom >= 14.0 -> 15f
+        zoom >= 13.0 -> 12f
+        else -> 9f
+    }
+
+    override fun draw(c: Canvas, osmv: MapView, shadow: Boolean) {
+        if (shadow) return
+        val pj = osmv.projection
+        val zoom = osmv.zoomLevelDouble
+        val bb = osmv.boundingBox
+        val n = net
+
+        if (n != null && zoom >= 12.0) {
+            for (e in n.edges) {
+                if (e.maxLat < bb.latSouth || e.minLat > bb.latNorth ||
+                    e.maxLon < bb.lonWest || e.minLon > bb.lonEast
+                ) continue
+                addPath(pj, e.pts)
+                c.drawPath(path, edgePaint)
+            }
+        }
+
+        for (leg in legs) {
+            addPath(pj, leg.pts)
+            if (leg.connected) {
+                c.drawPath(path, routeCasing)
+                c.drawPath(path, routePaint)
+            } else {
+                c.drawPath(path, brokenPaint)
+            }
+        }
+
+        if (n != null && zoom >= 11.0) {
+            val r = radiusDp(zoom) * dens
+            ring.strokeWidth = 2.5f * dens
+            text.textSize = r * 1.05f
+            val fm = text.fontMetrics
+            val textOffset = -(fm.ascent + fm.descent) / 2f
+            val w = osmv.width
+            val h = osmv.height
+            for (node in n.nodes.values) {
+                if (node.pos.latitude < bb.latSouth || node.pos.latitude > bb.latNorth ||
+                    node.pos.longitude < bb.lonWest || node.pos.longitude > bb.lonEast
+                ) continue
+                pj.toPixels(node.pos, tmp)
+                if (tmp.x < -r || tmp.y < -r || tmp.x > w + r || tmp.y > h + r) continue
+                val selected = routeIds.contains(node.id)
+                fill.color = if (selected) green else Color.WHITE
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, fill)
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, ring)
+                if (zoom >= 12.5) {
+                    text.color = if (selected) Color.WHITE else Color.BLACK
+                    c.drawText(node.ref, tmp.x.toFloat(), tmp.y + textOffset, text)
+                }
+            }
+        }
+
+        val m = me
+        if (m != null) {
+            pj.toPixels(m, tmp)
+            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 11f * dens, meRing)
+            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 8f * dens, meFill)
+        }
+    }
+
+    override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
+        val n = net ?: return false
+        if (navigating || mapView.zoomLevelDouble < 11.0) return false
+        val pj = mapView.projection
+        val limit = 30f * dens
+        var best: KNode? = null
+        var bestDist = Float.MAX_VALUE
+        for (node in n.nodes.values) {
+            pj.toPixels(node.pos, tmp)
+            val dx = tmp.x - e.x
+            val dy = tmp.y - e.y
+            val d = kotlin.math.sqrt(dx * dx + dy * dy)
+            if (d < limit && d < bestDist) {
+                bestDist = d
+                best = node
+            }
+        }
+        val hit = best ?: return false
+        onNodeTap?.invoke(hit)
+        return true
+    }
+}
