@@ -19,6 +19,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var legs: List<Leg> = emptyList()
     var me: GeoPoint? = null
     var navigating = false
+    var night = false
     var nextId: Long = -1L
     var meHeading: Float = Float.NaN
     var guide: List<GeoPoint> = emptyList()
@@ -88,10 +89,27 @@ class NetOverlay(private val dens: Float) : Overlay() {
         if (shadow) return
         val pj = osmv.projection
         val zoom = osmv.zoomLevelDouble
+        // Tijdens het navigeren: één duidelijke lijn, zoals in een autonavigatie.
+        val lineColor = when {
+            !navigating -> Color.parseColor("#F08A24")
+            night -> Color.parseColor("#2FD0F2")
+            else -> Color.parseColor("#1A73E8")
+        }
+        val casingColor = if (navigating && night) Color.parseColor("#06222A") else Color.WHITE
+        val lineWidth = (if (navigating) 8f else 5.5f) * dens
+        val casingWidth = (if (navigating) 12.5f else 9f) * dens
+        routePaint.color = lineColor
+        routePaint.strokeWidth = lineWidth
+        routeCasing.color = casingColor
+        routeCasing.strokeWidth = casingWidth
+        guidePaint.color = lineColor
+        guidePaint.strokeWidth = lineWidth
+        guideCasing.color = casingColor
+        guideCasing.strokeWidth = casingWidth
         val bb = osmv.boundingBox
         val n = net
 
-        if (n != null && zoom >= SHOW_FROM) {
+        if (n != null && zoom >= SHOW_FROM && !navigating) {
             for (e in n.edges) {
                 if (e.maxLat < bb.latSouth || e.minLat > bb.latNorth ||
                     e.maxLon < bb.lonWest || e.minLon > bb.lonEast
@@ -119,8 +137,8 @@ class NetOverlay(private val dens: Float) : Overlay() {
 
         // Alle knooppunten pas vanaf een bruikbaar zoomniveau; de gekozen route blijft altijd zichtbaar.
         if (n != null && (zoom >= SHOW_FROM || routeIds.isNotEmpty())) {
-            val all = zoom >= SHOW_FROM
-            val r = (if (all) radiusDp(zoom) else 6f) * dens
+            val all = zoom >= SHOW_FROM && !navigating
+            val r = (if (all) radiusDp(zoom) else if (navigating) 12f else 6f) * dens
             ring.strokeWidth = 2.5f * dens
             text.textSize = r * 1.05f
             val fm = text.fontMetrics
@@ -147,7 +165,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 } else {
                     c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, ring)
                 }
-                if (all && zoom >= 13.0) {
+                if ((all || navigating) && zoom >= 13.0) {
                     text.color = if (selected) Color.WHITE else Color.BLACK
                     c.drawText(node.ref, tmp.x.toFloat(), tmp.y + textOffset, text)
                 }

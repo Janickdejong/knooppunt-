@@ -37,7 +37,8 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -83,6 +84,29 @@ class MapActivity : Activity() {
     private var batchDone = 0
     private var retries = 0
     private var bundleChecked = false
+    private var styleMode = 0
+    private var shownNight: Boolean? = null
+    private lateinit var styleButton: TextView
+
+    // Rustige kaarten van CARTO (op basis van OpenStreetMap): helder overdag, donker 's avonds.
+    private val dayTiles = XYTileSource(
+        "CartoVoyager", 0, 20, 256, ".png",
+        arrayOf(
+            "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
+            "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
+            "https://c.basemaps.cartocdn.com/rastertiles/voyager/"
+        ),
+        "\u00A9 OpenStreetMap-bijdragers \u00A9 CARTO"
+    )
+    private val darkTiles = XYTileSource(
+        "CartoDark", 0, 20, 256, ".png",
+        arrayOf(
+            "https://a.basemaps.cartocdn.com/dark_all/",
+            "https://b.basemaps.cartocdn.com/dark_all/",
+            "https://c.basemaps.cartocdn.com/dark_all/"
+        ),
+        "\u00A9 OpenStreetMap-bijdragers \u00A9 CARTO"
+    )
     private var bundled = false
 
     // Route.
@@ -163,15 +187,18 @@ class MapActivity : Activity() {
 
         // Kaart.
         map = MapView(this).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(dayTiles)
             setMultiTouchControls(true)
+            // Grotere kaartletters, beter leesbaar op een telefoon.
+            isTilesScaledToDpi = true
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
             minZoomLevel = 6.0
-            maxZoomLevel = 19.0
+            maxZoomLevel = 20.0
         }
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         map.overlays.add(overlay)
+        map.overlays.add(CopyrightOverlay(this))
         root.addView(map, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val savedLat = prefs.getFloat("lat", Float.NaN)
@@ -398,6 +425,27 @@ class MapActivity : Activity() {
             setMargins(0, 0, dp(14), dp(150))
         })
 
+        // Kaartstijl: automatisch (donker 's avonds), altijd dag of altijd nacht.
+        styleButton = TextView(this).apply {
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
+            gravity = Gravity.CENTER
+            background = rounded(Color.WHITE, 17)
+            elevation = dp(6).toFloat()
+            setOnClickListener {
+                styleMode = (styleMode + 1) % 3
+                prefs.edit().putInt("style", styleMode).apply()
+                applyStyle()
+            }
+        }
+        root.addView(styleButton, FrameLayout.LayoutParams(dp(58), dp(34)).apply {
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            setMargins(0, 0, dp(14), 0)
+        })
+        styleMode = prefs.getInt("style", 0)
+        applyStyle()
+
         setContentView(root)
         updateSummary()
         updateMode()
@@ -422,6 +470,30 @@ class MapActivity : Activity() {
                 scheduleLoad()
             }
         }
+    }
+
+    private fun isNight(): Boolean = when (styleMode) {
+        1 -> false
+        2 -> true
+        else -> {
+            val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+            h >= 19 || h < 7
+        }
+    }
+
+    private fun applyStyle() {
+        val night = isNight()
+        styleButton.text = when (styleMode) {
+            1 -> "Dag"
+            2 -> "Nacht"
+            else -> "Auto"
+        }
+        overlay.night = night
+        if (shownNight != night) {
+            shownNight = night
+            map.setTileSource(if (night) darkTiles else dayTiles)
+        }
+        map.invalidate()
     }
 
     private fun textButton(label: String, onClick: () -> Unit) = TextView(this).apply {
@@ -804,6 +876,7 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        applyStyle()
         clearGuide()
         navFitted = false
         heading = -1f
@@ -830,6 +903,7 @@ class MapActivity : Activity() {
 
     private fun stopNavigation() {
         navigating = false
+        applyStyle()
         clearGuide()
         map.mapOrientation = 0f
         overlay.meHeading = Float.NaN
