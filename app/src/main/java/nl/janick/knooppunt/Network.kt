@@ -195,9 +195,11 @@ object Overpass {
         "https://overpass.kumi.systems/api/interpreter"
     )
 
+    @Volatile var lastError = ""
+
     fun fetch(south: Double, west: Double, north: Double, east: Double): String? {
         val box = "$south,$west,$north,$east"
-        val query = "[out:json][timeout:90];" +
+        val query = "[out:json][timeout:40];" +
             "(node[\"rcn_ref\"]($box);" +
             "relation[\"route\"=\"bicycle\"][\"network\"=\"rcn\"]($box););" +
             "out geom;"
@@ -206,19 +208,24 @@ object Overpass {
                 val c = URL(server).openConnection() as HttpURLConnection
                 c.requestMethod = "POST"
                 c.doOutput = true
-                c.connectTimeout = 15000
-                c.readTimeout = 120000
+                c.connectTimeout = 10000
+                c.readTimeout = 45000
                 c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
                 c.outputStream.use { it.write(("data=" + URLEncoder.encode(query, "UTF-8")).toByteArray()) }
-                if (c.responseCode == 200) {
+                val code = c.responseCode
+                if (code == 200) {
                     val text = c.inputStream.bufferedReader().use { it.readText() }
                     if (text.contains("\"elements\"") && !text.contains("runtime error")) return text
+                    lastError = "server gaf onvolledig antwoord"
+                } else {
+                    lastError = "server meldt $code"
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                lastError = e.javaClass.simpleName
             }
         }
         return null
     }
 
-    fun cellFile(dir: File, y: Int, x: Int) = File(dir, "${y}_${x}.json")
+    fun cellFile(dir: File, y: Int, x: Int) = File(dir, "c20_${y}_${x}.json")
 }

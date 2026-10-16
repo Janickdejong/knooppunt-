@@ -64,7 +64,8 @@ class MapActivity : Activity() {
     private lateinit var cellDir: File
 
     private val ui = Handler(Looper.getMainLooper())
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = Executors.newFixedThreadPool(2)
+    private val dataLock = Any()
 
     // Kaartgegevens; alleen aangeraakt op de achtergronddraad.
     private val rawNodes = HashMap<Long, JSONObject>()
@@ -438,11 +439,11 @@ class MapActivity : Activity() {
             return
         }
         val bb = map.boundingBox
-        val y0 = floor(bb.latSouth * 10).toInt()
-        val y1 = floor(bb.latNorth * 10).toInt()
-        val x0 = floor(bb.lonWest * 10).toInt()
-        val x1 = floor(bb.lonEast * 10).toInt()
-        if ((y1 - y0 + 1) * (x1 - x0 + 1) > 12) {
+        val y0 = floor(bb.latSouth * CELLS).toInt()
+        val y1 = floor(bb.latNorth * CELLS).toInt()
+        val x0 = floor(bb.lonWest * CELLS).toInt()
+        val x1 = floor(bb.lonEast * CELLS).toInt()
+        if ((y1 - y0 + 1) * (x1 - x0 + 1) > 20) {
             setStatus("Zoom verder in om de knooppunten te laden")
             return
         }
@@ -472,7 +473,7 @@ class MapActivity : Activity() {
             }
         }
         if (text == null) {
-            text = Overpass.fetch(y / 10.0, x / 10.0, (y + 1) / 10.0, (x + 1) / 10.0)
+            text = Overpass.fetch(y / CELLS, x / CELLS, (y + 1) / CELLS, (x + 1) / CELLS)
             if (text != null) {
                 try {
                     file.writeText(text)
@@ -484,14 +485,16 @@ class MapActivity : Activity() {
         if (text != null) {
             try {
                 val elements = JSONObject(text).optJSONArray("elements") ?: JSONArray()
-                for (i in 0 until elements.length()) {
-                    val el = elements.optJSONObject(i) ?: continue
-                    when (el.optString("type")) {
-                        "node" -> rawNodes[el.optLong("id")] = el
-                        "relation" -> rawRelations[el.optLong("id")] = el
+                synchronized(dataLock) {
+                    for (i in 0 until elements.length()) {
+                        val el = elements.optJSONObject(i) ?: continue
+                        when (el.optString("type")) {
+                            "node" -> rawNodes[el.optLong("id")] = el
+                            "relation" -> rawRelations[el.optLong("id")] = el
+                        }
                     }
+                    network = NetworkBuilder.build(rawNodes.values, rawRelations.values)
                 }
-                network = NetworkBuilder.build(rawNodes.values, rawRelations.values)
             } catch (_: Exception) {
                 file.delete()
             }
@@ -506,7 +509,7 @@ class MapActivity : Activity() {
                 if (pending == 0) setStatus("")
             } else {
                 requested.remove("$y/$x")
-                setStatus("Geen verbinding, knooppunten konden niet worden geladen")
+                setStatus("Laden mislukt (" + Overpass.lastError + "). Beweeg de kaart om opnieuw te proberen.")
             }
         }
     }
@@ -866,5 +869,6 @@ class MapActivity : Activity() {
         private const val REQ_LOCATION = 1
         private const val REQ_GPX = 2
         private const val OFF_ROUTE_METERS = 40.0
+        private const val CELLS = 20.0
     }
 }
