@@ -76,6 +76,8 @@ class MapActivity : Activity() {
     private var batchTotal = 0
     private var batchDone = 0
     private var retries = 0
+    private var bundleChecked = false
+    private var bundled = false
 
     // Route.
     private val routeIds = ArrayList<Long>()
@@ -348,7 +350,23 @@ class MapActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQ_LOCATION)
         }
-        scheduleLoad()
+        setStatus("Knooppunten openen\u2026")
+        io.execute {
+            val data = Bundled.load(this)
+            ui.post {
+                bundleChecked = true
+                if (data != null) {
+                    bundled = true
+                    overlay.net = data
+                    rebuildRoute()
+                    map.invalidate()
+                    setStatus("")
+                } else {
+                    setStatus("")
+                }
+                scheduleLoad()
+            }
+        }
     }
 
     private fun textButton(label: String, onClick: () -> Unit) = TextView(this).apply {
@@ -459,8 +477,14 @@ class MapActivity : Activity() {
     }
 
     private fun loadVisibleCells() {
+        if (!bundleChecked) return
         if (map.zoomLevelDouble < 12.0) {
             setStatus("Zoom verder in om de knooppunten te zien")
+            return
+        }
+        // Met de meegeleverde gegevens hoeft er niets opgehaald te worden.
+        if (bundled) {
+            setStatus("")
             return
         }
         val bb = map.boundingBox

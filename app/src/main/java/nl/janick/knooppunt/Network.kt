@@ -1,5 +1,6 @@
 package nl.janick.knooppunt
 
+import android.content.Context
 import org.json.JSONObject
 import org.osmdroid.util.GeoPoint
 import java.io.File
@@ -298,6 +299,67 @@ object Router {
                 out.add(GeoPoint(c2.getDouble(1), c2.getDouble(0)))
             }
             return if (out.size >= 2) out else null
+        } catch (_: Exception) {
+            return null
+        }
+    }
+}
+
+/** De knooppunten van heel Nederland, bij het bouwen van de app in de APK gezet (assets/knooppunten.json). */
+object Bundled {
+    private fun decode(s: String): List<GeoPoint> {
+        val out = ArrayList<GeoPoint>()
+        var i = 0
+        var lat = 0
+        var lon = 0
+        while (i < s.length) {
+            var shift = 0
+            var result = 0
+            var b: Int
+            do {
+                b = s[i++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            lat += if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+            shift = 0
+            result = 0
+            do {
+                b = s[i++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            lon += if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+            out.add(GeoPoint(lat / 1e6, lon / 1e6))
+        }
+        return out
+    }
+
+    /** null als de app zonder meegeleverde gegevens is gebouwd. */
+    fun load(context: Context): Network? {
+        try {
+            val text = context.assets.open("knooppunten.json").bufferedReader().use { it.readText() }
+            val root = JSONObject(text)
+            val rawNodes = root.getJSONArray("nodes")
+            val list = ArrayList<KNode>(rawNodes.length())
+            val map = HashMap<Long, KNode>()
+            for (i in 0 until rawNodes.length()) {
+                val n = rawNodes.getJSONArray(i)
+                val node = KNode(n.getLong(0), n.getString(1), GeoPoint(n.getDouble(2), n.getDouble(3)))
+                list.add(node)
+                map[node.id] = node
+            }
+            val rawEdges = root.getJSONArray("edges")
+            val edges = ArrayList<KEdge>(rawEdges.length())
+            for (i in 0 until rawEdges.length()) {
+                val e = rawEdges.getJSONArray(i)
+                val pts = decode(e.getString(2))
+                if (pts.size < 2) continue
+                var length = 0.0
+                for (k in 1 until pts.size) length += pts[k - 1].distanceToAsDouble(pts[k])
+                edges.add(KEdge(list[e.getInt(0)], list[e.getInt(1)], pts, length))
+            }
+            return if (edges.isEmpty()) null else Network(map, edges)
         } catch (_: Exception) {
             return null
         }

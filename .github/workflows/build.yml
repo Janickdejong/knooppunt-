@@ -16,6 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Alle fietsknooppunten van Nederland ophalen en in de app zetten. Lukt dit niet,
+      # dan wordt de app toch gebouwd en haalt hij de knooppunten zelf op.
+      - name: Knooppuntgegevens ophalen
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osmium-tool
+          curl -sSL --retry 3 -o nl.osm.pbf https://download.geofabrik.de/europe/netherlands-latest.osm.pbf
+          osmium tags-filter nl.osm.pbf r/network=rcn n/rcn_ref -o gefilterd.osm --overwrite
+          mkdir -p app/src/main/assets
+          python3 tools/build_data.py gefilterd.osm app/src/main/assets/knooppunten.json
+          ls -la app/src/main/assets
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
