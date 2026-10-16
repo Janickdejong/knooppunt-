@@ -19,6 +19,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var legs: List<Leg> = emptyList()
     var me: GeoPoint? = null
     var navigating = false
+    var nextId: Long = -1L
     var onNodeTap: ((KNode) -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
@@ -115,8 +116,17 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 if (tmp.x < -r || tmp.y < -r || tmp.x > w + r || tmp.y > h + r) continue
                 val selected = routeIds.contains(node.id)
                 fill.color = if (selected) green else Color.WHITE
-                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, fill)
-                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, ring)
+                val isNext = node.id == nextId
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), if (isNext) r * 1.35f else r, fill)
+                if (isNext) {
+                    ring.color = Color.parseColor("#F08A24")
+                    ring.strokeWidth = 5f * dens
+                    c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r * 1.35f, ring)
+                    ring.color = green
+                    ring.strokeWidth = 2.5f * dens
+                } else {
+                    c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), r, ring)
+                }
                 if (zoom >= 12.5) {
                     text.color = if (selected) Color.WHITE else Color.BLACK
                     c.drawText(node.ref, tmp.x.toFloat(), tmp.y + textOffset, text)

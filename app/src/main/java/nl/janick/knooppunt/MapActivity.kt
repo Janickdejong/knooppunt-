@@ -34,6 +34,7 @@ import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
@@ -102,6 +103,9 @@ class MapActivity : Activity() {
     private lateinit var navThen: TextView
     private lateinit var navTotal: TextView
     private lateinit var locateButton: TextView
+    private lateinit var navArrow: TextView
+    private var heading = -1f
+    private var navFitted = false
 
     private var locationManager: LocationManager? = null
     private val locationListener = object : LocationListener {
@@ -229,7 +233,7 @@ class MapActivity : Activity() {
             setPadding(dp(16), 0, 0, 0)
         }
         navDistance = TextView(this).apply {
-            textSize = 40f
+            textSize = 34f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
         }
@@ -240,6 +244,18 @@ class MapActivity : Activity() {
         navText.addView(navDistance)
         navText.addView(navThen)
         navTop.addView(navText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        navArrow = TextView(this).apply {
+            text = "\u25B2"
+            textSize = 26f
+            gravity = Gravity.CENTER
+            setTextColor(night)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(mint)
+            }
+            visibility = View.GONE
+        }
+        navTop.addView(navArrow, LinearLayout.LayoutParams(dp(64), dp(64)))
         navCard.addView(navTop)
         val navBottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -396,6 +412,7 @@ class MapActivity : Activity() {
         val here = GeoPoint(location.latitude, location.longitude)
         me = here
         overlay.me = here
+        if (location.hasBearing() && location.speed > 1f) heading = location.bearing
         if (!centeredOnMe && !hadSavedCenter) {
             centeredOnMe = true
             map.controller.setZoom(14.0)
@@ -404,7 +421,7 @@ class MapActivity : Activity() {
         }
         if (navigating) {
             updateNavigation(here)
-            map.controller.animateTo(here)
+            if (!wasOffRoute) map.controller.animateTo(here)
         }
         map.invalidate()
     }
@@ -638,6 +655,8 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        navFitted = false
+        heading = -1f
         navProgress = 0
         navNext = -1
         wasOffRoute = false
@@ -651,12 +670,14 @@ class MapActivity : Activity() {
         } else {
             map.controller.setCenter(routeNodes.first().pos)
             showNavigation(routeNodes.getOrNull(1)?.ref ?: "", "Wachten op GPS…", "", false)
+            navArrow.visibility = View.GONE
         }
         map.invalidate()
     }
 
     private fun stopNavigation() {
         navigating = false
+        overlay.nextId = -1L
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
         map.invalidate()
@@ -666,8 +687,15 @@ class MapActivity : Activity() {
         navBadge.text = badge
         navBadge.textSize = if (badge.length > 2) 30f else 38f
         navDistance.text = distance
+        navDistance.textSize = if (distance.length > 9) 24f else 34f
         navThen.text = then
         navCard.background = rounded(if (off) warn else night, 20)
+    }
+
+    private fun fitTo(a: GeoPoint, b: GeoPoint) {
+        if (a.distanceToAsDouble(b) < 80.0) return
+        val box = BoundingBox.fromGeoPoints(listOf(a, b))
+        map.zoomToBoundingBox(box.increaseByScale(1.5f), true)
     }
 
     private fun updateNavigation(here: GeoPoint) {
@@ -694,6 +722,8 @@ class MapActivity : Activity() {
             }
         }
         val off = bestDist > OFF_ROUTE_METERS
+        // Nog niet op de route begonnen: eerst naar het eerste knooppunt.
+        val toStart = off && navProgress <= 0
         if (!off && best >= 0) navProgress = best
 
         var k = 1
@@ -703,24 +733,50 @@ class MapActivity : Activity() {
             if (navNext != -1) map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             navNext = k
         }
-        if (off && !wasOffRoute) map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        val justOff = off && !wasOffRoute
+        val justBack = !off && wasOffRoute
+        if (justOff && !toStart) map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         wasOffRoute = off
 
-        val remaining = navCum[navCum.size - 1] - navCum[navProgress]
         if (k >= routeNodes.size) {
-            showNavigation("✓", "Aangekomen", "Je bent bij ${routeNodes.last().ref}", false)
+            overlay.nextId = -1L
+            navArrow.visibility = View.GONE
+            showNavigation("\u2713", "Aangekomen", "Je bent bij ${routeNodes.last().ref}", false)
             navTotal.text = ""
             return
         }
-        val toNext = navCum[navNodeIdx[k]] - navCum[navProgress] + (if (off) bestDist else 0.0)
+
         val next = routeNodes[k]
+        val remaining = navCum[navCum.size - 1] - navCum[navProgress]
+        val toNext = navCum[navNodeIdx[k]] - navCum[navProgress]
         val then = if (k + 1 < routeNodes.size) "Daarna ${routeNodes[k + 1].ref}" else "Dit is het laatste knooppunt"
-        if (off) {
-            showNavigation(next.ref, "Van de route", "${formatDistance(bestDist)} ernaast", true)
+        val target: GeoPoint
+        if (toStart) {
+            target = navPts[0]
+            overlay.nextId = routeNodes[0].id
+            showNavigation(routeNodes[0].ref, formatDistance(here.distanceToAsDouble(target)), "Ga hierheen om te beginnen", false)
+            navTotal.text = "Route: ${formatKm(totalLength())}"
+            if (!navFitted) {
+                navFitted = true
+                fitTo(here, target)
+            }
+        } else if (off) {
+            target = navPts[best]
+            overlay.nextId = next.id
+            showNavigation(next.ref, "Terug naar de route", "${formatDistance(bestDist)} verder", true)
+            navTotal.text = "Nog ${formatKm(remaining)}"
+            if (justOff) fitTo(here, target)
         } else {
+            target = navPts[min(navPts.size - 1, navProgress + 8)]
+            overlay.nextId = next.id
             showNavigation(next.ref, formatDistance(toNext), then, false)
+            navTotal.text = "Nog ${formatKm(remaining)}"
+            if (justBack) map.controller.setZoom(17.0)
         }
-        navTotal.text = "Nog ${formatKm(remaining)}"
+
+        val bearing = here.bearingTo(target).toFloat()
+        navArrow.rotation = if (heading >= 0f) bearing - heading else bearing
+        navArrow.visibility = View.VISIBLE
     }
 
     // ---------------------------------------------------------------- opslaan en delen
