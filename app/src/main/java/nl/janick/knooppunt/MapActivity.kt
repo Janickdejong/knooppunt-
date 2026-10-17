@@ -44,6 +44,7 @@ import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.gestures.RotationGestureOverlay
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -132,6 +133,7 @@ class MapActivity : Activity() {
     private lateinit var thenText: TextView
     private lateinit var muteButton: TextView
     private lateinit var searchButton: TextView
+    private lateinit var compassButton: TextView
     private var trip: Place? = null
     private lateinit var zoomInButton: TextView
     private lateinit var zoomOutButton: TextView
@@ -203,6 +205,7 @@ class MapActivity : Activity() {
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
+        map.overlays.add(RotationGestureOverlay(map).apply { isEnabled = true })
         map.overlays.add(overlay)
         root.addView(map, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -473,6 +476,7 @@ class MapActivity : Activity() {
             applyStyle()
         }
         searchButton = roundButton("\uD83D\uDD0D", 18f) { openSearch() }
+        compassButton = roundButton("N\u2191", 13f) { map.mapOrientation = 0f; map.invalidate() }
         voice = Voice(this)
         voice.muted = prefs.getBoolean("muted", false)
         muteButton = roundButton(if (voice.muted) "\uD83D\uDD07" else "\uD83D\uDD0A", 18f) { toggleMute() }
@@ -482,7 +486,7 @@ class MapActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        for (b in listOf(searchButton, styleButton, muteButton, zoomInButton, zoomOutButton)) {
+        for (b in listOf(searchButton, compassButton, styleButton, muteButton, zoomInButton, zoomOutButton)) {
             side.addView(b, LinearLayout.LayoutParams(dp(46), dp(46)).apply { topMargin = dp(10) })
         }
         root.addView(side, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -1089,6 +1093,7 @@ class MapActivity : Activity() {
         val navOnly = if (navigating) View.VISIBLE else View.GONE
         muteButton.visibility = navOnly
         searchButton.visibility = if (navigating) View.GONE else View.VISIBLE
+        compassButton.visibility = if (navigating) View.GONE else View.VISIBLE
         zoomInButton.visibility = navOnly
         zoomOutButton.visibility = navOnly
         findTopCard().visibility = if (navigating) View.GONE else View.VISIBLE
