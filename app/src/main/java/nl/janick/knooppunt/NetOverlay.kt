@@ -25,6 +25,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var guide: List<GeoPoint> = emptyList()
     var onNodeTap: ((KNode) -> Unit)? = null
     var onUserMove: (() -> Unit)? = null
+    @Volatile var passNodes: List<KNode> = emptyList()
     var onNodeLong: ((KNode) -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
@@ -152,7 +153,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
             val textOffset = -(fm.ascent + fm.descent) / 2f
             val w = osmv.width
             val h = osmv.height
-            val shown = if (all) n.nodes.values else routeIds.mapNotNull { n.nodes[it] }
+            val shown = if (all) n.nodes.values else if (navigating && passNodes.isNotEmpty()) passNodes else routeIds.mapNotNull { n.nodes[it] }
             for (node in shown) {
                 if (node.pos.latitude < bb.latSouth || node.pos.latitude > bb.latNorth ||
                     node.pos.longitude < bb.lonWest || node.pos.longitude > bb.lonEast

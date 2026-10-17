@@ -1228,6 +1228,43 @@ class MapActivity : Activity() {
         navNext = -1
     }
 
+    /** Zoekt de knooppunten langs de route, zodat je ze tijdens het navigeren ziet aankomen. */
+    private fun computePassNodes() {
+        val net = overlay.net
+        val pts = navPts
+        if (net == null || pts.size < 2) {
+            overlay.passNodes = emptyList()
+            return
+        }
+        val chosen = routeIds.toSet()
+        io.execute {
+            var minLat = 90.0
+            var maxLat = -90.0
+            var minLon = 180.0
+            var maxLon = -180.0
+            val sample = ArrayList<GeoPoint>()
+            for ((i, p) in pts.withIndex()) {
+                minLat = min(minLat, p.latitude)
+                maxLat = max(maxLat, p.latitude)
+                minLon = min(minLon, p.longitude)
+                maxLon = max(maxLon, p.longitude)
+                if (i % 3 == 0) sample.add(p)
+            }
+            val pad = 0.002
+            val found = ArrayList<KNode>()
+            for (node in net.nodes.values) {
+                val la = node.pos.latitude
+                val lo = node.pos.longitude
+                if (la < minLat - pad || la > maxLat + pad || lo < minLon - pad * 1.6 || lo > maxLon + pad * 1.6) continue
+                if (chosen.contains(node.id) || sample.any { it.distanceToAsDouble(node.pos) < 80.0 }) found.add(node)
+            }
+            ui.post {
+                overlay.passNodes = found
+                map.invalidate()
+            }
+        }
+    }
+
     private fun startNavigation() {
         if (legs.isEmpty() || navPts.size < 2) return
         if (me == null) {
@@ -1235,6 +1272,7 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        computePassNodes()
         guideFailed = false
         spoken.clear()
         zoomOffset = 0.0
@@ -1274,6 +1312,7 @@ class MapActivity : Activity() {
     }
 
     private fun stopNavigation() {
+        overlay.passNodes = emptyList()
         voice.stop()
         camInit = false
         headingKnown = false
