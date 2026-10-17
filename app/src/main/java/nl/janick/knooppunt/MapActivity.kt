@@ -251,7 +251,8 @@ class MapActivity : Activity() {
         }
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
-        overlay.onTownTap = { t -> townInfo(t) }
+        overlay.onTownTap = { t -> openInMaps(t.name, t.pos) }
+        overlay.onPoiTap = { p -> openInMaps(p.name, p.pos) }
         overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
         map.overlays.add(RotationGestureOverlay(map).apply { isEnabled = true })
@@ -2328,6 +2329,13 @@ class MapActivity : Activity() {
             Toast.makeText(this, "Kies eerst een route", Toast.LENGTH_SHORT).show()
             return
         }
+        if (overlay.towns.isNotEmpty()) {
+            overlay.towns = emptyList()
+            overlay.pois = emptyList()
+            map.invalidate()
+            Toast.makeText(this, "Markeringen weggehaald", Toast.LENGTH_SHORT).show()
+            return
+        }
         setStatus("Route verkennen\u2026")
         io.execute {
             val towns = try { Overpass.towns(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
@@ -2353,73 +2361,20 @@ class MapActivity : Activity() {
                     overlay.pois = sg?.map { it.first } ?: emptyList()
                     overlay.towns = t?.map { it.first } ?: emptyList()
                     map.invalidate()
-                    showExplore(t ?: emptyList(), sg ?: emptyList(), cum.last())
+                    Toast.makeText(this, "Tik op een plaatsnaam of ster voor Google Maps. Nog eens op Onderweg verkennen haalt ze weg.", Toast.LENGTH_LONG).show()
                 }
             }
         }
     }
 
-    private fun showExplore(towns: List<Pair<Town, Double>>, sights: List<Pair<Poi, Double>>, total: Double) {
-        sheet("Onderweg", "Tik ook op een plaatsnaam op de kaart. " + formatKm(total) + " \u00B7 " + towns.size + " plaatsen \u00B7 " + sights.size + " bezienswaardigheden", content = { d ->
-            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            fun header(t: String) = c.addView(TextView(this).apply {
-                text = t
-                textSize = 13f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(muted)
-                setPadding(0, dp(8), 0, dp(6))
-            })
-            val lp = { LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } }
-            if (towns.isNotEmpty()) header("PLAATSEN")
-            for ((tn, at) in towns) {
-                val pop = if (tn.population > 0) " \u00B7 " + String.format(Locale("nl", "NL"), "%,d", tn.population) + " inwoners" else ""
-                c.addView(listRow(tn.name, tn.label + pop + " \u00B7 na " + formatKm(at), null) { d.dismiss(); townInfo(tn) }, lp())
-            }
-            if (sights.isNotEmpty()) header("BEZIENSWAARDIG (STERREN OP DE KAART)")
-            for ((p, at) in sights) {
-                c.addView(listRow(p.name, "na " + formatKm(at), null) {
-                    d.dismiss()
-                    map.controller.animateTo(p.pos)
-                    map.controller.setZoom(16.5)
-                    poiActions(p)
-                }, lp())
-            }
-            ScrollView(this).apply { addView(c) }
-        }, actions = listOf(
-            SheetAction("Verberg markeringen", false) { overlay.pois = emptyList(); overlay.towns = emptyList(); map.invalidate() },
-            SheetAction("Sluiten", true) {}
-        ))
-    }
-
-    private fun townInfo(t: Town) {
-        val body = TextView(this).apply {
-            text = "Info laden\u2026"
-            textSize = 15f
-            setTextColor(ink)
-            setLineSpacing(0f, 1.15f)
-        }
-        var link: String? = null
-        sheet(t.name, t.label, content = { ScrollView(this).apply { addView(body) } }, actions = listOf(
-            SheetAction("Op de kaart", true) {
-                map.controller.animateTo(t.pos)
-                map.controller.setZoom(14.0)
-            },
-            SheetAction("Lees meer", false) {
-                val u = link ?: ("https://nl.wikipedia.org/wiki/" + android.net.Uri.encode(t.name.replace(' ', '_')))
-                try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u))) } catch (_: Exception) {}
-            },
-            SheetAction("Sluiten", false) {}
-        ))
-        io.execute {
-            val w = Overpass.wikiSummary(t.name, t.wiki)
-            ui.post {
-                if (w == null) {
-                    body.text = "Geen beschrijving gevonden. Tik op Lees meer om te zoeken."
-                } else {
-                    body.text = w.first
-                    link = w.second
-                }
-            }
+    /** Opent een plek in Google Maps (of een andere kaart-app). */
+    private fun openInMaps(name: String, pos: GeoPoint) {
+        val q = android.net.Uri.encode(name)
+        val geo = android.net.Uri.parse("geo:${pos.latitude},${pos.longitude}?q=${pos.latitude},${pos.longitude}($q)")
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, geo))
+        } catch (_: Exception) {
+            Toast.makeText(this, "Geen kaart-app gevonden", Toast.LENGTH_SHORT).show()
         }
     }
 
