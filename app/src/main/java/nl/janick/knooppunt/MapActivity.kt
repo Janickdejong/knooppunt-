@@ -2110,6 +2110,7 @@ class MapActivity : Activity() {
         sheet("Meer", content = { d ->
             column(
                 listRow("Rondje van X km", "Een lus vanaf waar je nu bent", glyph("\u21BB")) { d.dismiss(); askLoop() },
+                listRow("Onderweg verkennen", "Plaatsen en bezienswaardigheden langs de route", glyph("\u2605")) { d.dismiss(); explore() },
                 listRow("Pauzeplekken", "Cafés en toiletten langs de route", glyph("\u2615")) { d.dismiss(); findPois() },
                 listRow("Route delen", "Stuur de route naar iemand anders", glyph("\u2197")) { d.dismiss(); shareRoute() },
                 listRow("GPX openen", "Een route van iemand anders navigeren", glyph("\u2191")) { d.dismiss(); pickGpx() },
@@ -2314,6 +2315,107 @@ class MapActivity : Activity() {
                     overlay.pois = sorted.map { it.first }
                     map.invalidate()
                     showPoiList(sorted, cum.last())
+                }
+            }
+        }
+    }
+
+    /** Voor het vertrek: welke plaatsen en bezienswaardigheden kom je tegen? */
+    private fun explore() {
+        val line = if (navPts.size >= 2) navPts else legs.flatMap { it.pts }
+        if (line.size < 2) {
+            Toast.makeText(this, "Kies eerst een route", Toast.LENGTH_SHORT).show()
+            return
+        }
+        setStatus("Route verkennen\u2026")
+        io.execute {
+            val towns = try { Overpass.towns(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
+            val sights = try { Overpass.sights(line) } catch (e: Exception) { null }
+            val cum = DoubleArray(line.size)
+            for (i in 1 until line.size) cum[i] = cum[i - 1] + line[i - 1].distanceToAsDouble(line[i])
+            fun at(pos: GeoPoint): Double {
+                var bi = 0
+                var bd = Double.MAX_VALUE
+                for (i in line.indices) {
+                    val d = line[i].distanceToAsDouble(pos)
+                    if (d < bd) { bd = d; bi = i }
+                }
+                return cum[bi]
+            }
+            val t = towns?.map { it to at(it.pos) }?.sortedBy { it.second }
+            val sg = sights?.map { it to at(it.pos) }?.sortedBy { it.second }
+            ui.post {
+                setStatus("")
+                if (t == null && sg == null) {
+                    Toast.makeText(this, "Verkennen is niet gelukt (" + Overpass.lastError + "). Probeer het zo nog eens.", Toast.LENGTH_LONG).show()
+                } else {
+                    overlay.pois = sg?.map { it.first } ?: emptyList()
+                    map.invalidate()
+                    showExplore(t ?: emptyList(), sg ?: emptyList(), cum.last())
+                }
+            }
+        }
+    }
+
+    private fun showExplore(towns: List<Pair<Town, Double>>, sights: List<Pair<Poi, Double>>, total: Double) {
+        sheet("Onderweg", formatKm(total) + " \u00B7 " + towns.size + " plaatsen \u00B7 " + sights.size + " bezienswaardigheden", content = { d ->
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            fun header(t: String) = c.addView(TextView(this).apply {
+                text = t
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(muted)
+                setPadding(0, dp(8), 0, dp(6))
+            })
+            val lp = { LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) } }
+            if (towns.isNotEmpty()) header("PLAATSEN")
+            for ((tn, at) in towns) {
+                val pop = if (tn.population > 0) " \u00B7 " + String.format(Locale("nl", "NL"), "%,d", tn.population) + " inwoners" else ""
+                c.addView(listRow(tn.name, tn.label + pop + " \u00B7 na " + formatKm(at), null) { d.dismiss(); townInfo(tn) }, lp())
+            }
+            if (sights.isNotEmpty()) header("BEZIENSWAARDIG (STERREN OP DE KAART)")
+            for ((p, at) in sights) {
+                c.addView(listRow(p.name, "na " + formatKm(at), null) {
+                    d.dismiss()
+                    map.controller.animateTo(p.pos)
+                    map.controller.setZoom(16.5)
+                    poiActions(p)
+                }, lp())
+            }
+            ScrollView(this).apply { addView(c) }
+        }, actions = listOf(
+            SheetAction("Verberg markeringen", false) { overlay.pois = emptyList(); map.invalidate() },
+            SheetAction("Sluiten", true) {}
+        ))
+    }
+
+    private fun townInfo(t: Town) {
+        val body = TextView(this).apply {
+            text = "Info laden\u2026"
+            textSize = 15f
+            setTextColor(ink)
+            setLineSpacing(0f, 1.15f)
+        }
+        var link: String? = null
+        sheet(t.name, t.label, content = { ScrollView(this).apply { addView(body) } }, actions = listOf(
+            SheetAction("Op de kaart", true) {
+                map.controller.animateTo(t.pos)
+                map.controller.setZoom(14.0)
+            },
+            SheetAction("Lees meer", false) {
+                val u = link ?: ("https://nl.wikipedia.org/wiki/" + android.net.Uri.encode(t.name.replace(' ', '_')))
+                try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u))) } catch (_: Exception) {}
+            },
+            SheetAction("Sluiten", false) {}
+        ))
+        io.execute {
+            val w = Overpass.wikiSummary(t.name, t.wiki)
+            ui.post {
+                if (w == null) {
+                    body.text = "Geen beschrijving gevonden. Tik op Lees meer om te zoeken."
+                } else {
+                    body.text = w.first
+                    link = w.second
                 }
             }
         }

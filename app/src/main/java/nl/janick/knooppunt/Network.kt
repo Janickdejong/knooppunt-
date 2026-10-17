@@ -9,6 +9,11 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.PriorityQueue
 
+/** Een plaats langs de route, met wat OpenStreetMap erover weet. */
+class Town(val name: String, val type: String, val pos: GeoPoint, val population: Int, val wiki: String?) {
+    val label: String get() = when (type) { "city" -> "Stad"; "town" -> "Stad/plaats"; "village" -> "Dorp"; else -> "Gehucht" }
+}
+
 /** Een pauzeplek langs de route. */
 class Poi(val name: String, val kind: String, val pos: GeoPoint) {
     val label: String get() = when (kind) {
@@ -17,9 +22,10 @@ class Poi(val name: String, val kind: String, val pos: GeoPoint) {
         "restaurant" -> "Restaurant"
         "pub" -> "Café/kroeg"
         "ice_cream" -> "IJs"
+        "sight" -> "Bezienswaardig"
         else -> "Snack"
     }
-    val letter: String get() = when (kind) { "toilets" -> "WC"; "cafe" -> "C"; "restaurant" -> "R"; "pub" -> "K"; "ice_cream" -> "I"; else -> "S" }
+    val letter: String get() = when (kind) { "toilets" -> "WC"; "cafe" -> "C"; "restaurant" -> "R"; "pub" -> "K"; "ice_cream" -> "I"; "sight" -> "\u2605"; else -> "S" }
 }
 
 /** Een fietsknooppunt (rcn_ref in OpenStreetMap). */
@@ -439,6 +445,116 @@ object Overpass {
             }
         }
         return if (failed == chunks.size) null else out
+    }
+
+    /** Plaatsen (stad, dorp, gehucht) tot ongeveer 1,5 km van de route. */
+    fun towns(line: List<GeoPoint>): List<Town>? {
+        if (line.size < 2) return null
+        val out = ArrayList<Town>()
+        val seen = HashSet<Long>()
+        var failed = 0
+        val chunks = splitChunks(line, 10000.0)
+        for (chunk in chunks) {
+            val pad = 0.02
+            val box = boxOf(chunk, pad)
+            val text = post("[out:json][timeout:25];node[\"place\"~\"^(city|town|village|hamlet)$\"][\"name\"]($box);out;")
+            if (text == null) { failed++; continue }
+            val arr = JSONObject(text).getJSONArray("elements")
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val t = o.optJSONObject("tags") ?: continue
+                val pos = GeoPoint(o.getDouble("lat"), o.getDouble("lon"))
+                var near = Double.MAX_VALUE
+                for (j in 1 until chunk.size) {
+                    near = minOf(near, segDist(pos, chunk[j - 1], chunk[j]))
+                    if (near < 1500.0) break
+                }
+                if (near > 1500.0 || !seen.add(o.getLong("id"))) continue
+                out.add(Town(t.getString("name"), t.optString("place"), pos, t.optString("population").filter { it.isDigit() }.toIntOrNull() ?: 0, t.optString("wikipedia").ifEmpty { null }))
+            }
+        }
+        return if (failed == chunks.size) null else out
+    }
+
+    /** Bezienswaardigheden direct langs de route (200 m). */
+    fun sights(line: List<GeoPoint>): List<Poi>? {
+        if (line.size < 2) return null
+        val out = ArrayList<Poi>()
+        val seen = HashSet<String>()
+        var failed = 0
+        val chunks = splitChunks(line, 4000.0)
+        for (chunk in chunks) {
+            val box = boxOf(chunk, 0.003)
+            val q = "[out:json][timeout:25];(" +
+                "nwr[\"tourism\"~\"^(attraction|museum|viewpoint|artwork)$\"][\"name\"]($box);" +
+                "nwr[\"historic\"~\"^(castle|monument|windmill|ruins|fort|city_gate|manor|memorial|archaeological_site)$\"][\"name\"]($box);" +
+                "nwr[\"man_made\"~\"^(windmill|watermill|tower|lighthouse)$\"][\"name\"]($box););out center 400;"
+            val text = post(q)
+            if (text == null) { failed++; continue }
+            val arr = JSONObject(text).getJSONArray("elements")
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val t = o.optJSONObject("tags") ?: continue
+                val lat = if (o.has("lat")) o.getDouble("lat") else o.optJSONObject("center")?.getDouble("lat") ?: continue
+                val lon = if (o.has("lon")) o.getDouble("lon") else o.optJSONObject("center")?.getDouble("lon") ?: continue
+                val pos = GeoPoint(lat, lon)
+                var near = Double.MAX_VALUE
+                for (j in 1 until chunk.size) {
+                    near = minOf(near, segDist(pos, chunk[j - 1], chunk[j]))
+                    if (near < 200.0) break
+                }
+                if (near > 200.0 || !seen.add(o.getString("type") + o.getLong("id"))) continue
+                out.add(Poi(t.getString("name"), "sight", pos))
+            }
+        }
+        return if (failed == chunks.size) null else out
+    }
+
+    private fun splitChunks(line: List<GeoPoint>, meters: Double): List<List<GeoPoint>> {
+        val chunks = ArrayList<List<GeoPoint>>()
+        var cur = ArrayList<GeoPoint>()
+        var acc = 0.0
+        for (i in line.indices) {
+            if (i > 0) acc += line[i - 1].distanceToAsDouble(line[i])
+            cur.add(line[i])
+            if (acc >= meters) {
+                chunks.add(cur)
+                cur = arrayListOf(line[i])
+                acc = 0.0
+            }
+        }
+        if (cur.size >= 2) chunks.add(cur)
+        return chunks
+    }
+
+    private fun boxOf(chunk: List<GeoPoint>, pad: Double): String = String.format(
+        java.util.Locale.US, "%.5f,%.5f,%.5f,%.5f",
+        chunk.minOf { it.latitude } - pad, chunk.minOf { it.longitude } - pad * 1.6,
+        chunk.maxOf { it.latitude } + pad, chunk.maxOf { it.longitude } + pad * 1.6
+    )
+
+    /** Korte tekst over een plaats uit Wikipedia: (tekst, link). */
+    fun wikiSummary(name: String, tag: String?): Pair<String, String?>? {
+        var lang = "nl"
+        var title = name
+        if (tag != null && tag.contains(":")) {
+            lang = tag.substringBefore(":")
+            title = tag.substringAfter(":")
+        }
+        return try {
+            val url = URL("https://$lang.wikipedia.org/api/rest_v1/page/summary/" + URLEncoder.encode(title.replace(' ', '_'), "UTF-8").replace("+", "%20"))
+            val c = url.openConnection() as HttpURLConnection
+            c.connectTimeout = 8000
+            c.readTimeout = 10000
+            c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
+            if (c.responseCode != 200) return null
+            val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+            if (o.optString("type") == "disambiguation") return null
+            val extract = o.optString("extract")
+            if (extract.isEmpty()) null else extract to o.optJSONObject("content_urls")?.optJSONObject("mobile")?.optString("page")
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun post(query: String): String? {
