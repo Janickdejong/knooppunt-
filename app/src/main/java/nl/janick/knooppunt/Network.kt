@@ -371,15 +371,50 @@ object Overpass {
         return null
     }
 
-    /** Cafés, restaurants en toiletten binnen 300 m van de route. */
+    /** Cafés, restaurants en toiletten direct langs de route (150 m). Lange routes gaan in stukken van 8 km. */
     fun pois(line: List<GeoPoint>): List<Poi>? {
         if (line.size < 2) return null
-        val step = maxOf(1, line.size / 60)
-        val sample = (line.indices step step).map { line[it] } + line.last()
-        val coords = sample.joinToString(",") { String.format(java.util.Locale.US, "%.5f,%.5f", it.latitude, it.longitude) }
-        val query = "[out:json][timeout:25];" +
-            "nwr[\"amenity\"~\"^(cafe|restaurant|toilets|fast_food|pub|ice_cream)\$\"](around:300,$coords);" +
-            "out center 200;"
+        val chunks = ArrayList<List<GeoPoint>>()
+        var cur = ArrayList<GeoPoint>()
+        var acc = 0.0
+        for (i in line.indices) {
+            if (i > 0) acc += line[i - 1].distanceToAsDouble(line[i])
+            cur.add(line[i])
+            if (acc >= 8000.0) {
+                chunks.add(cur)
+                cur = arrayListOf(line[i])
+                acc = 0.0
+            }
+        }
+        if (cur.size >= 2) chunks.add(cur)
+        val seen = HashSet<String>()
+        val out = ArrayList<Poi>()
+        var failed = 0
+        for (chunk in chunks) {
+            val step = maxOf(1, chunk.size / 50)
+            val sample = (chunk.indices step step).map { chunk[it] } + chunk.last()
+            val coords = sample.joinToString(",") { String.format(java.util.Locale.US, "%.5f,%.5f", it.latitude, it.longitude) }
+            val query = "[out:json][timeout:25];" +
+                "nwr[\"amenity\"~\"^(cafe|restaurant|toilets|fast_food|pub|ice_cream)\$\"](around:150,$coords);" +
+                "out center 300;"
+            val text = post(query)
+            if (text == null) { failed++; continue }
+            val arr = JSONObject(text).getJSONArray("elements")
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val tags = o.optJSONObject("tags") ?: continue
+                val kind = tags.optString("amenity")
+                val name = tags.optString("name", "")
+                if (kind != "toilets" && name.isEmpty()) continue
+                val lat = if (o.has("lat")) o.getDouble("lat") else o.optJSONObject("center")?.getDouble("lat") ?: continue
+                val lon = if (o.has("lon")) o.getDouble("lon") else o.optJSONObject("center")?.getDouble("lon") ?: continue
+                if (seen.add(o.getString("type") + o.getLong("id"))) out.add(Poi(name.ifEmpty { "Toilet" }, kind, GeoPoint(lat, lon)))
+            }
+        }
+        return if (failed == chunks.size) null else out
+    }
+
+    private fun post(query: String): String? {
         val body = ("data=" + URLEncoder.encode(query, "UTF-8")).toByteArray()
         for (offset in servers.indices) {
             val server = servers[(preferred + offset) % servers.size]
@@ -393,20 +428,7 @@ object Overpass {
                 c.outputStream.use { it.write(body) }
                 if (c.responseCode != 200) continue
                 val text = c.inputStream.bufferedReader().use { it.readText() }
-                if (!text.contains("\"elements\"")) continue
-                val arr = JSONObject(text).getJSONArray("elements")
-                val out = ArrayList<Poi>()
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val tags = o.optJSONObject("tags") ?: continue
-                    val kind = tags.optString("amenity")
-                    val name = tags.optString("name", "")
-                    if (kind != "toilets" && name.isEmpty()) continue
-                    val lat = if (o.has("lat")) o.getDouble("lat") else o.optJSONObject("center")?.getDouble("lat") ?: continue
-                    val lon = if (o.has("lon")) o.getDouble("lon") else o.optJSONObject("center")?.getDouble("lon") ?: continue
-                    out.add(Poi(name.ifEmpty { "Toilet" }, kind, GeoPoint(lat, lon)))
-                }
-                return out
+                if (text.contains("\"elements\"")) return text
             } catch (_: Exception) {
             }
         }

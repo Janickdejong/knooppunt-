@@ -2221,14 +2221,31 @@ class MapActivity : Activity() {
         }
     }
 
+    private fun poiActions(p: Poi) {
+        sheet(p.name, p.label, actions = listOf(
+            SheetAction("Open in Maps", true) {
+                val q = android.net.Uri.encode(p.name)
+                val geo = android.net.Uri.parse("geo:${p.pos.latitude},${p.pos.longitude}?q=${p.pos.latitude},${p.pos.longitude}($q)")
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, geo))
+                } catch (_: Exception) {
+                    Toast.makeText(this, "Geen kaart-app gevonden", Toast.LENGTH_SHORT).show()
+                }
+            },
+            SheetAction("Fietsen hierheen", false) { bikeTo(Place(p.name, "", p.pos.latitude, p.pos.longitude)) },
+            SheetAction("Sluiten", false) {}
+        ))
+    }
+
     private fun showPoiList(items: List<Pair<Poi, Double>>, total: Double) {
-        sheet("Pauzeplekken", "Op de kaart gemarkeerd. Halverwege is bij " + formatKm(total / 2), content = { d ->
+        sheet("Pauzeplekken", "Tik op een plek voor Maps. Halverwege is bij " + formatKm(total / 2), content = { d ->
             val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             for ((p, at) in items.take(40)) {
                 val row = listRow(p.name, p.label + " \u00B7 na " + formatKm(at), null) {
                     d.dismiss()
                     map.controller.animateTo(p.pos)
                     map.controller.setZoom(16.5)
+                    poiActions(p)
                 }
                 c.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
             }
