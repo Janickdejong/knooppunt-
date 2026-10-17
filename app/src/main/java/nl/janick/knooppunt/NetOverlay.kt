@@ -29,7 +29,6 @@ class NetOverlay(private val dens: Float) : Overlay() {
     @Volatile var pois: List<Poi> = emptyList()
     @Volatile var towns: List<Town> = emptyList()
     var onTownTap: ((Town) -> Unit)? = null
-    var onPoiTap: ((Poi) -> Unit)? = null
     private val townPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1D2733"); typeface = android.graphics.Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
     private val townBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val townRect = android.graphics.RectF()
@@ -190,7 +189,11 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 }
                 if ((all || navigating) && zoom >= 13.0) {
                     text.color = if (selected) Color.WHITE else Color.BLACK
+                    // Tekst rechtop houden als de kaart gedraaid is.
+                    c.save()
+                    c.rotate(-osmv.mapOrientation, tmp.x.toFloat(), tmp.y.toFloat())
                     c.drawText(node.ref, tmp.x.toFloat(), tmp.y + textOffset, text)
+                    c.restore()
                 }
             }
         }
@@ -199,6 +202,8 @@ class NetOverlay(private val dens: Float) : Overlay() {
             val r = townBox(t, pj)
             if (r.right < 0 || r.bottom < 0 || r.left > osmv.width || r.top > osmv.height) continue
             townRect.set(r)
+            c.save()
+            c.rotate(-osmv.mapOrientation, r.centerX(), r.centerY())
             townBg.color = Color.WHITE
             c.drawRoundRect(townRect, 14f * dens, 14f * dens, townBg)
             townBg.color = Color.parseColor("#8A5A2B")
@@ -207,6 +212,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
             c.drawRoundRect(townRect, 14f * dens, 14f * dens, townBg)
             townBg.style = Paint.Style.FILL
             c.drawText(t.name, r.centerX(), r.centerY() + townPaint.textSize * 0.35f, townPaint)
+            c.restore()
         }
 
         if (pois.isNotEmpty()) {
@@ -221,7 +227,10 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), pr + 2f * dens, fillWhite)
                 c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), pr, fill)
                 text.color = Color.WHITE
+                c.save()
+                c.rotate(-osmv.mapOrientation, tmp.x.toFloat(), tmp.y.toFloat())
                 c.drawText(poi.letter, tmp.x.toFloat(), tmp.y + off2, text)
+                c.restore()
             }
         }
 
@@ -239,7 +248,8 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 arrowPath.close()
                 c.save()
                 c.translate(tmp.x.toFloat(), tmp.y.toFloat())
-                c.rotate(h + osmv.mapOrientation)
+                // Het canvas is al met de kaart meegedraaid; alleen de eigen richting nog.
+                c.rotate(h)
                 c.drawPath(arrowPath, arrowOutline)
                 c.drawPath(arrowPath, meFill)
                 c.restore()
@@ -256,17 +266,22 @@ class NetOverlay(private val dens: Float) : Overlay() {
         return false
     }
 
+    /** Tikplek omrekenen naar kaartpixels zonder draaiing, zoals toPixels ze geeft. */
+    private fun tapPoint(e: MotionEvent, mapView: MapView): Point =
+        mapView.projection.unrotateAndScalePoint(e.x.toInt(), e.y.toInt(), null)
+
     private fun nodeAt(e: MotionEvent, mapView: MapView): KNode? {
         val n = net ?: return null
         if (navigating || mapView.zoomLevelDouble < SHOW_FROM) return null
         val pj = mapView.projection
+        val tp = tapPoint(e, mapView)
         val limit = 30f * dens
         var best: KNode? = null
         var bestDist = Float.MAX_VALUE
         for (node in n.nodes.values) {
             pj.toPixels(node.pos, tmp)
-            val dx = tmp.x - e.x
-            val dy = tmp.y - e.y
+            val dx = (tmp.x - tp.x).toFloat()
+            val dy = (tmp.y - tp.y).toFloat()
             val d = kotlin.math.sqrt(dx * dx + dy * dy)
             if (d < limit && d < bestDist) {
                 bestDist = d
@@ -278,8 +293,9 @@ class NetOverlay(private val dens: Float) : Overlay() {
 
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val pj = mapView.projection
+        val tp = tapPoint(e, mapView)
         for (t in towns) {
-            if (townBox(t, pj).contains(e.x, e.y)) {
+            if (townBox(t, pj).contains(tp.x.toFloat(), tp.y.toFloat())) {
                 onTownTap?.invoke(t)
                 return true
             }

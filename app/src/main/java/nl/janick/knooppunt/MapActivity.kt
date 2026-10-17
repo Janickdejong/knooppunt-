@@ -162,6 +162,8 @@ class MapActivity : Activity() {
     private var dispHeading = 0f
     private var dispArrow = 0f
     private var compass = Float.NaN
+    private var decl = 0f
+    private var declAt: GeoPoint? = null
     private var sensors: android.hardware.SensorManager? = null
     private val compassListener = object : android.hardware.SensorEventListener {
         private val rot = FloatArray(9)
@@ -177,10 +179,11 @@ class MapActivity : Activity() {
             android.hardware.SensorManager.getOrientation(m, ori)
             var az = Math.toDegrees(ori[0].toDouble()).toFloat()
             val here = me
-            if (here != null) {
-                val decl = android.hardware.GeomagneticField(here.latitude.toFloat(), here.longitude.toFloat(), 0f, System.currentTimeMillis()).declination
-                az += decl
+            if (here != null && declAt?.let { it.distanceToAsDouble(here) < 50_000.0 } != true) {
+                decl = android.hardware.GeomagneticField(here.latitude.toFloat(), here.longitude.toFloat(), 0f, System.currentTimeMillis()).declination
+                declAt = here
             }
+            az += decl
             az = (az + 360f) % 360f
             compass = if (compass.isNaN()) az else (compass + angleDiff(az, compass) * 0.12f + 360f) % 360f
         }
@@ -515,6 +518,16 @@ class MapActivity : Activity() {
         row.addView(iconButton("\u2630", "Routes") { openRoutes() })
         row.addView(iconButton("\u22EF", "Meer") { openMore() })
         bottomBar.addView(row)
+        // Bronvermelding van de kaart, zoals OpenStreetMap vraagt.
+        bottomBar.addView(TextView(this).apply {
+            text = "Kaart \u00A9 OpenStreetMap-bijdragers"
+            textSize = 10f
+            setTextColor(muted)
+            gravity = Gravity.CENTER
+            setOnClickListener {
+                try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.openstreetmap.org/copyright"))) } catch (_: Exception) {}
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(bottomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.BOTTOM
             setMargins(dp(10), 0, dp(10), dp(10))
@@ -839,6 +852,10 @@ class MapActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            sensors?.unregisterListener(compassListener)
+        } catch (_: Exception) {
+        }
         voice.shutdown()
         io.shutdown()
     }
@@ -1208,6 +1225,8 @@ class MapActivity : Activity() {
 
     private fun clearRoute() {
         routeIds.clear()
+        overlay.towns = emptyList()
+        overlay.pois = emptyList()
         rebuildRoute()
     }
 
@@ -1279,8 +1298,16 @@ class MapActivity : Activity() {
         startButton.visibility = if (!navigating && legs.isNotEmpty()) View.VISIBLE else View.GONE
         overlay.navigating = navigating
         val lp = locateButton.layoutParams as FrameLayout.LayoutParams
-        lp.bottomMargin = if (navigating) dp(100) else if (legs.isNotEmpty()) dp(175) else dp(105)
+        lp.bottomMargin = if (navigating) dp(140) else if (legs.isNotEmpty()) dp(175) else dp(105)
         locateButton.layoutParams = lp
+        if (navigating) {
+            // De onderbalk is twee regels hoog: snelheid en locatieknop er netjes boven zetten.
+            navBar.post {
+                val above = navBar.height + dp(8) + dp(12)
+                (locateButton.layoutParams as FrameLayout.LayoutParams).let { it.bottomMargin = above; locateButton.layoutParams = it }
+                (speedView.layoutParams as FrameLayout.LayoutParams).let { it.bottomMargin = above; speedView.layoutParams = it }
+            }
+        }
     }
 
     private fun findTopCard(): View = titleView.parent as View
@@ -1411,6 +1438,7 @@ class MapActivity : Activity() {
             renderNav(TurnArrowView.POINTER, 0f, "GPS zoeken\u2026", "Wacht op een nauwkeurig signaal", routeNodes.first().ref, "", false)
             etaMain.text = formatKm(totalLength())
             etaSub.text = "Route"
+            etaNext.visibility = View.GONE
         }
         map.invalidate()
     }
@@ -1479,12 +1507,16 @@ class MapActivity : Activity() {
             Toast.makeText(this, "Dit knooppunt kun je niet overslaan", Toast.LENGTH_SHORT).show()
             return
         }
+        if (k == routeNodes.size - 2) {
+            // Er moet na het overslaan nog een stuk route over zijn om te volgen.
+            Toast.makeText(this, "Vlak voor het eindpunt kan overslaan niet. Fiets door naar knooppunt ${routeNodes.last().ref}.", Toast.LENGTH_LONG).show()
+            return
+        }
         val here = me ?: return
         val skipped = routeNodes[k]
-        val start = net.nodes.values.filter { it.id != skipped.id }.minByOrNull { it.pos.distanceToAsDouble(here) } ?: return
         if (skipBackup == null) skipBackup = ArrayList(routeIds)
-        val rest = routeNodes.drop(k + 1).map { it.id }
-        val ids = if (rest.firstOrNull() == start.id) rest else listOf(start.id) + rest
+        // Vanaf je plek rechtstreeks naar het knooppunt na het overgeslagen nummer.
+        val ids = routeNodes.drop(k + 1).map { it.id }
         routeIds.clear()
         routeIds.addAll(ids)
         rebuildRoute()
@@ -1492,7 +1524,9 @@ class MapActivity : Activity() {
         spoken.clear()
         spoken.add("start")
         wasOffRoute = false
-        say("Knooppunt ${skipped.ref} overgeslagen")
+        clearGuide()
+        guideFailed = false
+        say("Knooppunt ${skipped.ref} overgeslagen. Volgende knooppunt ${routeNodes.firstOrNull()?.ref ?: ""}")
         updateNavigation(here)
         followMe(here)
     }
@@ -1658,10 +1692,10 @@ class MapActivity : Activity() {
             ensureGuide(here, fetchGoal)
             val g = guide
             overlay.nextId = goalNode.id
-            val what = if (joinNearest) "Dichtstbijzijnde punt van de route" else if (toStart) "Startpunt" else "Terug naar de route"
+            val what = if (joinNearest) "Dichtstbijzijnde punt van de route" else if (toStart && skipBackup != null) "Naar knooppunt ${goalNode.ref}" else if (toStart) "Startpunt" else "Terug naar de route"
             if (g != null) {
                 val left = g.remaining() + g.locate(here)
-                val m = guidance(g, "g", left, if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
+                val m = guidance(g, "g", left, if (toStart && skipBackup != null) "Rechtdoor" else if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
                 renderNav(m.first, 0f, m.second, m.third, goalNode.ref, "$what \u00B7 ${formatDistance(left)}", !toStart)
                 setUpcoming(if (toStart) 0 else k, left)
                 remainingAll = if (toStart) left + navCum[navCum.size - 1] else left + remaining
@@ -2478,8 +2512,8 @@ class MapActivity : Activity() {
     private fun parseGpx(text: String): List<GeoPoint>? {
         val re = Regex("<(?:trkpt|rtept)\\s[^>]*?>")
         var pts = re.findAll(text).mapNotNull { m ->
-            val la = Regex("lat=\"([-0-9.]+)\"").find(m.value)?.groupValues?.get(1)?.toDoubleOrNull()
-            val lo = Regex("lon=\"([-0-9.]+)\"").find(m.value)?.groupValues?.get(1)?.toDoubleOrNull()
+            val la = Regex("lat=[\"']([-0-9.]+)[\"']").find(m.value)?.groupValues?.get(1)?.toDoubleOrNull()
+            val lo = Regex("lon=[\"']([-0-9.]+)[\"']").find(m.value)?.groupValues?.get(1)?.toDoubleOrNull()
             if (la != null && lo != null) GeoPoint(la, lo) else null
         }.toList()
         if (pts.size > 4000) {

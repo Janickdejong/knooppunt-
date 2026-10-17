@@ -145,7 +145,27 @@ class Network(val nodes: Map<Long, KNode>, val edges: List<KEdge>) {
     /** Maakt een rondje van ongeveer `target` meter vanaf `start` over de knooppunten (begin en eind = start). */
     fun loop(start: KNode, target: Double, seed: Long = System.nanoTime()): List<KNode>? {
         val rnd = java.util.Random(seed)
-        val pool = nodes.values.filter { it.id != start.id }
+        // Alleen knooppunten die over het netwerk bereikbaar zijn en niet te ver weg liggen:
+        // dat scheelt veel rekenwerk en voorkomt pogingen naar een los eilandje.
+        val reach = HashMap<Long, Double>()
+        val q = PriorityQueue<Pair<Double, Long>>(compareBy<Pair<Double, Long>> { it.first })
+        reach[start.id] = 0.0
+        q.add(0.0 to start.id)
+        val limit = target * 0.7
+        while (q.isNotEmpty()) {
+            val (d, id) = q.poll()!!
+            if (d > (reach[id] ?: Double.MAX_VALUE) || d > limit) continue
+            for (e in adj[id] ?: continue) {
+                val other = if (e.a.id == id) e.b else e.a
+                val nd = d + e.length
+                if (nd < (reach[other.id] ?: Double.MAX_VALUE)) {
+                    reach[other.id] = nd
+                    q.add(nd to other.id)
+                }
+            }
+        }
+        val pool = reach.keys.filter { it != start.id }.mapNotNull { nodes[it] }
+        if (pool.size < 2) return null
         var best: List<KNode>? = null
         var bestScore = Double.MAX_VALUE
         for (attempt in 0 until 60) {
@@ -393,9 +413,9 @@ object Overpass {
         return Math.hypot(ax + t * dx, ay + t * dy)
     }
 
-    /** Voert het werk voor elk stuk route tegelijk uit (drie tegelijk) en voegt de uitkomsten samen. null = alles mislukt. */
+    /** Voert het werk voor elk stuk route tegelijk uit (twee tegelijk, zodat de server ons niet weigert) en voegt de uitkomsten samen. null = alles mislukt. */
     private fun <T> parallel(chunks: List<List<GeoPoint>>, work: (List<GeoPoint>) -> List<T>?): List<T>? {
-        val pool = java.util.concurrent.Executors.newFixedThreadPool(3)
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
         try {
             val futures = chunks.map { c -> pool.submit<List<T>?> { try { work(c) } catch (_: Exception) { null } } }
             val all = ArrayList<T>()
