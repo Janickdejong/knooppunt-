@@ -74,7 +74,12 @@ class Network(val nodes: Map<Long, KNode>, val edges: List<KEdge>) {
             // Een eenrichtingspad voor fietsers kan terug een andere weg zijn.
             val seq = if (forward) e.pts else (e.back ?: e.pts.reversed())
             for ((i, p) in seq.withIndex()) {
-                if (i == 0 && pts.isNotEmpty()) continue
+                if (i == 0 && pts.isNotEmpty()) {
+                    // Twee bordjes van hetzelfde knooppunt: een stukje rechtstreeks overbruggen.
+                    val gap = pts.last().distanceToAsDouble(p)
+                    if (gap < 5.0) continue
+                    length += gap
+                }
                 pts.add(p)
             }
             length += e.length

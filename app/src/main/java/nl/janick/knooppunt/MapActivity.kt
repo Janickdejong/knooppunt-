@@ -1126,7 +1126,13 @@ class MapActivity : Activity() {
         } else {
             val found = routeIds.mapNotNull { net.nodes[it] }
             routeNodes = found
-            legs = (0 until max(0, found.size - 1)).map { net.leg(found[it], found[it + 1]) }
+            val raw = (0 until max(0, found.size - 1)).map { net.leg(found[it], found[it + 1]) }
+            // Sluit de stukken op elkaar aan, ook als een knooppunt uit twee bordjes bestaat.
+            legs = raw.mapIndexed { i, l ->
+                val prev = if (i > 0) raw[i - 1].pts.last() else null
+                val gap = if (prev != null) prev.distanceToAsDouble(l.pts.first()) else 0.0
+                if (prev != null && gap >= 5.0) Leg(listOf(prev) + l.pts, l.length + gap, l.connected) else l
+            }
         }
         overlay.legs = legs
         buildNavigationLine()

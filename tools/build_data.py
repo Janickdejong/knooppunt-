@@ -218,7 +218,7 @@ def main(src, dst):
     for nid, (ref, _, _) in c.nodes.items():
         by_ref.setdefault(norm(ref), []).append(nid)
 
-    # Hetzelfde nummer vlak bij elkaar (bijv. een bordje aan beide kanten van een kruising) is
+    # Hetzelfde nummer dicht bij elkaar (bijv. een bordje aan beide kanten van een kruising) is
     # één knooppunt: voeg ze samen, zodat routes er doorheen kunnen lopen.
     rep = {}
     cent = {}
@@ -235,9 +235,9 @@ def main(src, dst):
             px = (c.nodes[x][1], c.nodes[x][2])
             for y in ids[i + 1:]:
                 py = (c.nodes[y][1], c.nodes[y][2])
-                if abs(px[0] - py[0]) > 0.002 or abs(px[1] - py[1]) > 0.004:
+                if abs(px[0] - py[0]) > 0.004 or abs(px[1] - py[1]) > 0.007:
                     continue
-                if dist(px, py) <= 80.0:
+                if dist(px, py) <= 250.0:
                     parent[find(x)] = find(y)
         groups = {}
         for i in ids:
