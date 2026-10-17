@@ -235,9 +235,9 @@ def main(src, dst):
             px = (c.nodes[x][1], c.nodes[x][2])
             for y in ids[i + 1:]:
                 py = (c.nodes[y][1], c.nodes[y][2])
-                if abs(px[0] - py[0]) > 0.004 or abs(px[1] - py[1]) > 0.007:
+                if abs(px[0] - py[0]) > 0.006 or abs(px[1] - py[1]) > 0.010:
                     continue
-                if dist(px, py) <= 250.0:
+                if dist(px, py) <= 400.0:
                     parent[find(x)] = find(y)
         groups = {}
         for i in ids:
