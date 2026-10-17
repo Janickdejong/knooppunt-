@@ -601,7 +601,7 @@ class MapActivity : Activity() {
         try {
             for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
                 if (lm.isProviderEnabled(provider)) {
-                    lm.requestLocationUpdates(provider, 1000L, 2f, locationListener)
+                    lm.requestLocationUpdates(provider, 1000L, 0f, locationListener)
                     val last = lm.getLastKnownLocation(provider)
                     if (last != null && me == null) onLocation(last)
                 }
@@ -611,7 +611,21 @@ class MapActivity : Activity() {
         }
     }
 
+    private var lastGpsAt = 0L
+    private var meAccuracy = 9999f
+
     private fun onLocation(location: Location) {
+        // Alleen betrouwbare plekbepalingen: een grove netwerkplek springt honderden meters heen en weer
+        // en laat route en kaart door elkaar lopen.
+        val now = System.currentTimeMillis()
+        val acc = if (location.hasAccuracy()) location.accuracy else 50f
+        if (location.provider == LocationManager.GPS_PROVIDER) {
+            if (acc <= 75f) lastGpsAt = now
+        } else if (now - lastGpsAt < 15000L) {
+            return
+        }
+        if (navigating && (acc > 75f || now - location.time > 30000L)) return
+        meAccuracy = acc
         val here = GeoPoint(location.latitude, location.longitude)
         me = here
         overlay.me = here
@@ -968,7 +982,7 @@ class MapActivity : Activity() {
         wasOffRoute = false
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
-        val here = me
+        val here = if (meAccuracy <= 75f) me else null
         navZoom = 17.3
         lastFix = null
         map.controller.setZoom(navZoom)
@@ -978,7 +992,8 @@ class MapActivity : Activity() {
             followMe(here)
         } else {
             map.controller.setCenter(routeNodes.first().pos)
-            renderNav(TurnArrowView.POINTER, 0f, "GPS\u2026", "Wachten op je locatie", routeNodes.first().ref, "", false)
+            thenBar.visibility = View.GONE
+            renderNav(TurnArrowView.POINTER, 0f, "GPS zoeken\u2026", "Wacht op een nauwkeurig signaal", routeNodes.first().ref, "", false)
             etaMain.text = formatKm(totalLength())
             etaSub.text = "Route"
         }
@@ -1538,9 +1553,9 @@ class MapActivity : Activity() {
 
     /** Fietsroute van je plek naar een adres, met dezelfde navigatie als de knooppuntroutes. */
     private fun bikeTo(p: Place) {
-        val here = me
+        val here = if (meAccuracy <= 75f) me else null
         if (here == null) {
-            Toast.makeText(this, "Je locatie is nog niet gevonden", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "De GPS is nog niet nauwkeurig genoeg. Ga naar buiten en probeer het zo nog eens.", Toast.LENGTH_LONG).show()
             startLocation()
             return
         }
