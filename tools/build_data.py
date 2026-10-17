@@ -9,6 +9,7 @@ al aan elkaar gekoppeld en vereenvoudigd, zodat de app niets hoeft te berekenen.
 import json
 import math
 import re
+import heapq
 import sys
 from datetime import date
 
@@ -22,11 +23,12 @@ class Collector:
 
     def __init__(self):
         self.nodes = {}  # id -> (ref, lat, lon), alleen knooppunten met rcn_ref
-        self.ways = {}   # id -> [(lat, lon), ...]
+        self.ways = {}   # id -> [node ids]
+        self.loc = {}    # node id -> (lat, lon)
         self.rels = []   # (id, ref, name, note, [way ids])
 
     def read(self, src):
-        loc = {}
+        loc = self.loc
         for _, el in ET.iterparse(src, events=("end",)):
             tag = el.tag
             if tag == "node":
@@ -38,9 +40,9 @@ class Collector:
                         self.nodes[nid] = (t.get("v"), lat, lon)
                 el.clear()
             elif tag == "way":
-                pts = [loc[int(n.get("ref"))] for n in el.findall("nd") if int(n.get("ref")) in loc]
-                if len(pts) >= 2:
-                    self.ways[int(el.get("id"))] = pts
+                ids = [int(n.get("ref")) for n in el.findall("nd") if int(n.get("ref")) in loc]
+                if len(ids) >= 2:
+                    self.ways[int(el.get("id"))] = ids
                 el.clear()
             elif tag == "relation":
                 tags = {t.get("k"): t.get("v") for t in el.findall("tag")}
@@ -62,38 +64,76 @@ def norm(ref):
     return ref.strip().lstrip("0") or "0"
 
 
-def nearest(candidates, ways, nodes):
-    best, best_d = None, 300.0
+def way_graph(way_ids, ways, loc):
+    """Graaf van de wegstukken van een route: punt-id -> [(buur, afstand)]."""
+    adj = {}
+    for w in way_ids:
+        ids = ways.get(w)
+        if not ids:
+            continue
+        for u, v in zip(ids, ids[1:]):
+            if u == v:
+                continue
+            d = dist(loc[u], loc[v])
+            adj.setdefault(u, []).append((v, d))
+            adj.setdefault(v, []).append((u, d))
+    return adj
+
+
+def nearest(candidates, adj, loc, nodes):
+    """Knooppunt (uit candidates) met het dichtstbijzijnde wegpunt van de route, binnen 300 m."""
+    if not adj:
+        return None, None
+    lats = [loc[n][0] for n in adj]
+    lons = [loc[n][1] for n in adj]
+    pad = 0.005
+    lo_lat, hi_lat, lo_lon, hi_lon = min(lats) - pad, max(lats) + pad, min(lons) - pad, max(lons) + pad
+    best, best_node, best_d = None, None, 300.0
     for nid in candidates:
         pos = (nodes[nid][1], nodes[nid][2])
-        for w in ways:
-            for p in (w[0], w[-1]):
-                d = dist(pos, p)
-                if d < best_d:
-                    best, best_d = nid, d
-    return best
+        if not (lo_lat <= pos[0] <= hi_lat and lo_lon <= pos[1] <= hi_lon):
+            continue
+        for n in adj:
+            d = dist(pos, loc[n])
+            if d < best_d:
+                best, best_node, best_d = nid, n, d
+    return best, best_node
 
 
-def chain(ways, start):
-    left = list(ways)
-    out = []
-    cur = start
-    while left:
-        bi, br, bd = -1, False, float("inf")
-        for i, w in enumerate(left):
-            d1, d2 = dist(cur, w[0]), dist(cur, w[-1])
-            if d1 < bd:
-                bi, br, bd = i, False, d1
-            if d2 < bd:
-                bi, br, bd = i, True, d2
-        if bi < 0 or bd > 200.0:
+def shortest(adj, src, dst):
+    """Kortste weg over de wegstukken (Dijkstra); lijst met punt-id's of None."""
+    best = {src: 0.0}
+    prev = {}
+    heap = [(0.0, src)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if u == dst:
             break
-        w = left.pop(bi)
-        if br:
-            w = w[::-1]
-        out.extend(w)
-        cur = w[-1]
-    return out
+        if d > best.get(u, float("inf")):
+            continue
+        for v, w in adj.get(u, ()):
+            nd = d + w
+            if nd < best.get(v, float("inf")):
+                best[v] = nd
+                prev[v] = u
+                heapq.heappush(heap, (nd, v))
+    if dst not in best:
+        return None
+    path = [dst]
+    while path[-1] != src:
+        path.append(prev[path[-1]])
+    return path[::-1]
+
+
+def bridge_gaps(adj, loc, maxd=150.0):
+    """Verbindt losse uiteinden die dicht bij elkaar liggen (kleine gaten in de route)."""
+    ends = [n for n, nb in adj.items() if len(nb) == 1]
+    for i, u in enumerate(ends):
+        for v in ends[i + 1:]:
+            d = dist(loc[u], loc[v])
+            if d <= maxd:
+                adj[u].append((v, d))
+                adj[v].append((u, d))
 
 
 def simplify(pts, tol=3.0):
@@ -155,6 +195,7 @@ def main(src, dst):
         by_ref.setdefault(norm(ref), []).append(nid)
 
     edges = []
+    skipped = 0
     for rid, ref, name, note, way_ids in c.rels:
         text = next((t for t in (ref, name, note) if LINK.search(t)), None)
         if text is None:
@@ -163,21 +204,26 @@ def main(src, dst):
         ra, rb = norm(m.group(1)), norm(m.group(2))
         if ra == rb:
             continue
-        ways = [c.ways[w] for w in way_ids if w in c.ways]
-        if not ways:
+        adj = way_graph(way_ids, c.ways, c.loc)
+        if not adj:
             continue
-        a = nearest(by_ref.get(ra, []), ways, c.nodes)
-        b = nearest(by_ref.get(rb, []), ways, c.nodes)
-        if a is None or b is None or a == b:
+        a, na = nearest(by_ref.get(ra, []), adj, c.loc, c.nodes)
+        b, nb = nearest(by_ref.get(rb, []), adj, c.loc, c.nodes)
+        if a is None or b is None or a == b or na == nb:
+            continue
+        path = shortest(adj, na, nb)
+        if path is None:
+            bridge_gaps(adj, c.loc)
+            path = shortest(adj, na, nb)
+        if path is None:
+            skipped += 1
             continue
         pa = (c.nodes[a][1], c.nodes[a][2])
         pb = (c.nodes[b][1], c.nodes[b][2])
-        chained = chain(ways, pa)
-        if len(chained) < 2:
-            continue
-        pts = simplify([pa] + chained + [pb])
+        pts = simplify([pa] + [c.loc[n] for n in path] + [pb])
         edges.append((a, b, pts))
 
+    print(f"{skipped} verbindingen overgeslagen (geen doorlopende weg)")
     used = sorted({e[0] for e in edges} | {e[1] for e in edges})
     index = {nid: i for i, nid in enumerate(used)}
     data = {
