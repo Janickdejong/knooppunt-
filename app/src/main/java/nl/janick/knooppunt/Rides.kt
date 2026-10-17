@@ -41,7 +41,7 @@ class RideRecorder {
     fun avgSpeed(): Double = if (movingMs > 0) distance / (movingMs / 1000.0) else 0.0
 }
 
-class RideInfo(val file: File, val name: String, val start: Long, val distance: Double, val moving: Long, val max: Double)
+class RideInfo(val file: File, val name: String, val start: Long, val distance: Double, val moving: Long, val max: Double, val thumb: DoubleArray)
 
 object Rides {
     private fun dir(ctx: Context) = File(ctx.filesDir, "rides").also { it.mkdirs() }
@@ -66,7 +66,17 @@ object Rides {
         for (f in dir(ctx).listFiles() ?: emptyArray()) {
             try {
                 val o = JSONObject(f.readText())
-                out.add(RideInfo(f, o.optString("name"), o.optLong("start"), o.optDouble("dist"), o.optLong("moving"), o.optDouble("max")))
+                val pts = o.optJSONArray("pts") ?: JSONArray()
+                val step = maxOf(1, pts.length() / 40)
+                val flat = ArrayList<Double>()
+                var i = 0
+                while (i < pts.length()) {
+                    val p = pts.getJSONArray(i)
+                    flat.add(p.getDouble(0))
+                    flat.add(p.getDouble(1))
+                    i += step
+                }
+                out.add(RideInfo(f, o.optString("name"), o.optLong("start"), o.optDouble("dist"), o.optLong("moving"), o.optDouble("max"), flat.toDoubleArray()))
             } catch (_: Exception) {
             }
         }

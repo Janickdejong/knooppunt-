@@ -61,7 +61,7 @@ class MapActivity : Activity() {
     private val paper = Color.parseColor("#F5F2EC")
     private val ink = Color.parseColor("#1D2733")
     private val muted = Color.parseColor("#6B7280")
-    private val accent = Color.parseColor("#2F7D6D")
+    private val accent = Color.parseColor("#1E8E4E")
     private val night = Color.parseColor("#0E1726")
     private val mint = Color.parseColor("#9ADBC8")
     private val warn = Color.parseColor("#8E2F22")
@@ -226,12 +226,12 @@ class MapActivity : Activity() {
         // Bovenkaart met de route.
         val topCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(Color.WHITE, 16)
-            elevation = dp(6).toFloat()
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = rounded(Color.WHITE, 20)
+            elevation = dp(8).toFloat()
+            setPadding(dp(18), dp(14), dp(18), dp(14))
         }
         titleView = TextView(this).apply {
-            textSize = 18f
+            textSize = 20f
             setTextColor(ink)
             typeface = Typeface.DEFAULT_BOLD
         }
@@ -350,7 +350,7 @@ class MapActivity : Activity() {
         }
         val etaColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         etaMain = TextView(this).apply {
-            textSize = 21f
+            textSize = 24f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#8BE0A8"))
         }
@@ -400,17 +400,17 @@ class MapActivity : Activity() {
         // Onderbalk met knoppen.
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(paper, 20)
-            elevation = dp(8).toFloat()
-            setPadding(dp(12), dp(12), dp(12), dp(8))
+            background = rounded(Color.WHITE, 26)
+            elevation = dp(12).toFloat()
+            setPadding(dp(12), dp(12), dp(12), dp(6))
         }
         startButton = TextView(this).apply {
-            text = "Start navigatie"
+            text = "\u25B6  Start navigatie"
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            background = rounded(accent, 16)
+            background = rounded(accent, 18)
             setPadding(0, dp(16), 0, dp(16))
             setOnClickListener { startNavigation() }
         }
@@ -418,20 +418,21 @@ class MapActivity : Activity() {
             bottomMargin = dp(6)
         })
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(textButton("Terug") { undo() })
-        row.addView(textButton("Wis") { clearRoute() })
-        row.addView(textButton("Opslaan") { saveRoute() })
-        row.addView(textButton("Routes") { openRoutes() })
-        row.addView(textButton("Meer") { openMore() })
+        row.addView(iconButton("\u21B6", "Terug") { undo() })
+        row.addView(iconButton("\u2715", "Wis") { clearRoute() })
+        row.addView(iconButton("\u2605", "Opslaan") { saveRoute() })
+        row.addView(iconButton("\u2630", "Routes") { openRoutes() })
+        row.addView(iconButton("\u22EF", "Meer") { openMore() })
         bottomBar.addView(row)
         root.addView(bottomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.BOTTOM
+            setMargins(dp(10), 0, dp(10), dp(10))
         })
 
         // Knop om naar je eigen plek te gaan.
         locateButton = TextView(this).apply {
-            text = "◎"
-            textSize = 24f
+            text = "\u25CE"
+            textSize = 22f
             setTextColor(ink)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
@@ -441,9 +442,9 @@ class MapActivity : Activity() {
             elevation = dp(6).toFloat()
             setOnClickListener { goToMe() }
         }
-        root.addView(locateButton, FrameLayout.LayoutParams(dp(52), dp(52)).apply {
+        root.addView(locateButton, FrameLayout.LayoutParams(dp(46), dp(46)).apply {
             gravity = Gravity.BOTTOM or Gravity.END
-            setMargins(0, 0, dp(14), dp(150))
+            setMargins(0, 0, dp(12), dp(165))
         })
 
         // Ronde knoppen rechts: kaartstijl, geluid en in- of uitzoomen.
@@ -545,15 +546,179 @@ class MapActivity : Activity() {
         map.invalidate()
     }
 
-    private fun textButton(label: String, onClick: () -> Unit) = TextView(this).apply {
+    private fun iconButton(glyph: String, label: String, onClick: () -> Unit): LinearLayout {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(6))
+            isClickable = true
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        box.addView(TextView(this).apply {
+            text = glyph
+            textSize = 20f
+            setTextColor(ink)
+            gravity = Gravity.CENTER
+        })
+        box.addView(TextView(this).apply {
+            text = label
+            textSize = 11f
+            setTextColor(muted)
+            gravity = Gravity.CENTER
+        })
+        return box
+    }
+
+    private class SheetAction(val label: String, val primary: Boolean, val run: () -> Unit)
+
+    private fun sheetButton(label: String, primary: Boolean, onClick: () -> Unit) = TextView(this).apply {
         text = label
-        textSize = 14f
+        textSize = 15f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(ink)
         gravity = Gravity.CENTER
-        setPadding(0, dp(12), 0, dp(12))
+        if (primary) {
+            setTextColor(Color.WHITE)
+            background = rounded(accent, 14)
+        } else {
+            setTextColor(accent)
+            background = rounded(Color.parseColor("#EAF4EE"), 14)
+        }
+        setPadding(dp(18), dp(12), dp(18), dp(12))
         setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    }
+
+    /** Eigen dialoog in de stijl van de app: afgeronde kaart, titel, inhoud en knoppen. */
+    private fun sheet(
+        title: String,
+        subtitle: String? = null,
+        content: ((AlertDialog) -> View)? = null,
+        actions: List<SheetAction> = emptyList()
+    ): AlertDialog {
+        val d = AlertDialog.Builder(this).create()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(Color.WHITE, 24)
+            setPadding(dp(20), dp(20), dp(20), dp(16))
+        }
+        box.addView(TextView(this).apply {
+            text = title
+            textSize = 20f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
+        })
+        if (subtitle != null) {
+            box.addView(TextView(this).apply {
+                text = subtitle
+                textSize = 14f
+                setTextColor(muted)
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+        if (content != null) {
+            box.addView(ScrollView(this).apply { addView(content(d)) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(12)
+            })
+        }
+        if (actions.isNotEmpty()) {
+            val stacked = actions.size > 2
+            val row = LinearLayout(this).apply {
+                orientation = if (stacked) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+            }
+            for (a in actions) {
+                val b = sheetButton(a.label, a.primary) {
+                    d.dismiss()
+                    a.run()
+                }
+                row.addView(b, if (stacked) {
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+                } else {
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = dp(8) }
+                })
+            }
+            box.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(14)
+            })
+        }
+        d.setView(box)
+        d.show()
+        d.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        d.window?.setLayout((resources.displayMetrics.widthPixels * 0.92).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        return d
+    }
+
+    /** Een rij in een lijst: kaartje met eventueel een plaatje links, titel en een regel eronder. */
+    private fun listRow(title: String, line: String?, leading: View?, onClick: () -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(paper, 16)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        if (leading != null) row.addView(leading)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(if (leading != null) dp(12) else 0, 0, 0, 0)
+        }
+        col.addView(TextView(this).apply {
+            text = title
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
+        })
+        if (line != null) {
+            col.addView(TextView(this).apply {
+                text = line
+                textSize = 13f
+                setTextColor(muted)
+            })
+        }
+        row.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        return row
+    }
+
+    private fun column(vararg rows: View): LinearLayout {
+        val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        for (r in rows) c.addView(r, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+        return c
+    }
+
+    private fun glyph(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 20f
+        gravity = Gravity.CENTER
+        setTextColor(accent)
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor("#EAF4EE"))
+        }
+        layoutParams = LinearLayout.LayoutParams(dp(42), dp(42))
+    }
+
+    private fun statBlock(value: String, label: String): LinearLayout {
+        val b = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = rounded(paper, 16)
+            setPadding(dp(6), dp(12), dp(6), dp(12))
+        }
+        b.addView(TextView(this).apply {
+            text = value
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
+            gravity = Gravity.CENTER
+        })
+        b.addView(TextView(this).apply {
+            text = label
+            textSize = 12f
+            setTextColor(muted)
+            gravity = Gravity.CENTER
+        })
+        return b
     }
 
     // ---------------------------------------------------------------- levenscyclus
@@ -918,7 +1083,7 @@ class MapActivity : Activity() {
         startButton.visibility = if (!navigating && legs.isNotEmpty()) View.VISIBLE else View.GONE
         overlay.navigating = navigating
         val lp = locateButton.layoutParams as FrameLayout.LayoutParams
-        lp.bottomMargin = if (navigating) dp(100) else if (legs.isNotEmpty()) dp(150) else dp(100)
+        lp.bottomMargin = if (navigating) dp(100) else if (legs.isNotEmpty()) dp(175) else dp(105)
         locateButton.layoutParams = lp
     }
 
@@ -1312,26 +1477,21 @@ class MapActivity : Activity() {
             Toast.makeText(this, "Je hebt nog geen routes opgeslagen", Toast.LENGTH_SHORT).show()
             return
         }
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(4), dp(8), dp(4))
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Opgeslagen routes")
-            .setView(ScrollView(this).apply { addView(column) })
-            .setNegativeButton("Sluiten", null)
-            .create()
-        for (i in 0 until list.length()) {
-            column.addView(routeRow(list.getJSONObject(i), i, dialog))
-        }
-        dialog.show()
+        sheet("Opgeslagen routes", content = { d ->
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            for (i in 0 until list.length()) {
+                c.addView(routeRow(list.getJSONObject(i), i, d), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+            }
+            c
+        }, actions = listOf(SheetAction("Sluiten", false) {}))
     }
 
     private fun routeRow(o: JSONObject, index: Int, dialog: AlertDialog): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(10), dp(8), dp(10))
+            background = rounded(paper, 16)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnClickListener {
                 dialog.dismiss()
                 loadRoute(o)
@@ -1349,6 +1509,7 @@ class MapActivity : Activity() {
             this.text = o.optString("name")
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ink)
         })
         val refs = o.optJSONArray("refs")
         if (refs != null && refs.length() > 0) {
@@ -1357,7 +1518,7 @@ class MapActivity : Activity() {
             text.addView(TextView(this).apply {
                 this.text = shown.joinToString(" \u2192 ")
                 textSize = 14f
-                alpha = 0.85f
+                setTextColor(ink)
             })
         }
         val meters = o.optDouble("meters", 0.0)
@@ -1370,12 +1531,12 @@ class MapActivity : Activity() {
         text.addView(TextView(this).apply {
             this.text = stats.joinToString(" \u00B7 ")
             textSize = 13f
-            alpha = 0.65f
+            setTextColor(muted)
         })
         text.addView(TextView(this).apply {
             this.text = "Verwijderen"
             textSize = 13f
-            alpha = 0.8f
+            setTextColor(warn)
             paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
             setPadding(0, dp(8), dp(16), dp(4))
             setOnClickListener { confirmDelete(o, index, dialog) }
@@ -1437,57 +1598,51 @@ class MapActivity : Activity() {
     private fun isSaved(p: Place) = savedPlaces().any { Math.abs(it.lat - p.lat) < 1e-5 && Math.abs(it.lon - p.lon) < 1e-5 }
 
     private fun openSearch() {
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(4))
-        }
-        val input = EditText(this).apply {
-            hint = "Adres of plaats, bijv. Kerkstraat 5 Doesburg"
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
-        }
-        column.addView(input)
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Naar adres fietsen")
-            .setView(ScrollView(this).apply { addView(column) })
-            .setPositiveButton("Zoeken", null)
-            .setNegativeButton("Sluiten", null)
-            .create()
+        var input: EditText? = null
         val places = savedPlaces()
-        if (places.isNotEmpty()) {
-            column.addView(TextView(this).apply {
-                text = "Mijn plekken"
-                textSize = 13f
-                setTextColor(muted)
-                setPadding(0, dp(16), 0, dp(4))
-            })
-            for (pl in places) {
-                column.addView(TextView(this).apply {
-                    text = pl.name + "\n" + pl.address.split(",").take(3).joinToString(",")
-                    textSize = 15f
-                    setTextColor(ink)
-                    setPadding(0, dp(10), 0, dp(10))
-                    setOnClickListener {
-                        dialog.dismiss()
-                        placeActions(pl)
+        sheet("Naar adres fietsen", content = { d ->
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val field = EditText(this).apply {
+                hint = "Adres of plaats, bijv. Kerkstraat 5 Doesburg"
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSingleLine(true)
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+                setOnEditorActionListener { v, _, _ ->
+                    val q = v.text.toString().trim()
+                    if (q.isNotEmpty()) {
+                        d.dismiss()
+                        searchAddress(q)
                     }
+                    true
+                }
+            }
+            input = field
+            c.addView(field)
+            if (places.isNotEmpty()) {
+                c.addView(TextView(this).apply {
+                    text = "Mijn plekken"
+                    textSize = 13f
+                    setTextColor(muted)
+                    setPadding(0, dp(16), 0, dp(8))
                 })
+                for (pl in places) {
+                    c.addView(
+                        listRow(pl.name, pl.address.split(",").take(3).joinToString(","), glyph("\u2302")) {
+                            d.dismiss()
+                            placeActions(pl)
+                        },
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+                    )
+                }
             }
-        }
-        dialog.show()
-        val go = {
-            val q = input.text.toString().trim()
-            if (q.isNotEmpty()) {
-                dialog.dismiss()
-                searchAddress(q)
-            }
-        }
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { go() }
-        input.setOnEditorActionListener { _, _, _ ->
-            go()
-            true
-        }
+            c
+        }, actions = listOf(
+            SheetAction("Zoeken", true) {
+                val q = input?.text?.toString()?.trim().orEmpty()
+                if (q.isNotEmpty()) searchAddress(q)
+            },
+            SheetAction("Sluiten", false) {}
+        ))
     }
 
     private fun searchAddress(q: String) {
@@ -1497,11 +1652,14 @@ class MapActivity : Activity() {
                 if (list.isEmpty()) {
                     Toast.makeText(this, "Niets gevonden. Probeer straat, huisnummer en plaats.", Toast.LENGTH_LONG).show()
                 } else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Kies het adres")
-                        .setItems(list.map { it.address }.toTypedArray()) { _, i -> placeActions(list[i]) }
-                        .setNegativeButton("Sluiten", null)
-                        .show()
+                    sheet("Kies het adres", content = { d ->
+                        column(*list.map { pl ->
+                            listRow(pl.name, pl.address, glyph("\u2316")) {
+                                d.dismiss()
+                                placeActions(pl)
+                            } as View
+                        }.toTypedArray())
+                    }, actions = listOf(SheetAction("Sluiten", false) {}))
                 }
             }
         }
@@ -1511,19 +1669,17 @@ class MapActivity : Activity() {
         map.controller.setZoom(16.0)
         map.controller.setCenter(GeoPoint(p.lat, p.lon))
         val saved = isSaved(p)
-        AlertDialog.Builder(this)
-            .setTitle(p.name)
-            .setMessage(p.address)
-            .setPositiveButton("Fietsen hierheen") { _, _ -> bikeTo(p) }
-            .setNeutralButton(if (saved) "Verwijder plek" else "Bewaar als plek") { _, _ ->
+        sheet(p.name, p.address, actions = listOf(
+            SheetAction("Fietsen hierheen", true) { bikeTo(p) },
+            SheetAction(if (saved) "Verwijder plek" else "Bewaar als plek", false) {
                 if (saved) {
                     writePlaces(savedPlaces().filter { !(Math.abs(it.lat - p.lat) < 1e-5 && Math.abs(it.lon - p.lon) < 1e-5) })
                 } else {
                     askPlaceName(p)
                 }
-            }
-            .setNegativeButton("Sluiten", null)
-            .show()
+            },
+            SheetAction("Sluiten", false) {}
+        ))
     }
 
     private fun askPlaceName(p: Place) {
@@ -1590,32 +1746,37 @@ class MapActivity : Activity() {
 
     private fun finishRide(r: RideRecorder, tripTitle: String?) {
         if (r.distance < 300.0) return
-        val msg = formatKm(r.distance) + " in " + formatDuration(r.movingMs) +
-            "\nGemiddeld " + kmh(r.avgSpeed()) + " km/u \u00B7 max " + kmh(r.maxSpeed) + " km/u"
         val name = tripTitle ?: routeName()
-        AlertDialog.Builder(this)
-            .setTitle("Rit klaar")
-            .setMessage(msg)
-            .setPositiveButton("Bewaren") { _, _ ->
+        sheet("Rit klaar", "Max. snelheid " + kmh(r.maxSpeed) + " km/u", content = {
+            val g = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val items = listOf(
+                formatKm(r.distance) to "afstand",
+                formatDuration(r.movingMs) to "tijd",
+                kmh(r.avgSpeed()) to "gem. km/u"
+            )
+            for ((i, it) in items.withIndex()) {
+                g.addView(statBlock(it.first, it.second), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (i > 0) leftMargin = dp(8)
+                })
+            }
+            g
+        }, actions = listOf(
+            SheetAction("Bewaren", true) {
                 io.execute { Rides.save(applicationContext, r, name) }
                 Toast.makeText(this, "Rit bewaard bij Meer \u203A Mijn ritten", Toast.LENGTH_LONG).show()
-            }
-            .setNegativeButton("Weggooien", null)
-            .show()
+            },
+            SheetAction("Weggooien", false) {}
+        ))
     }
 
     private fun openMore() {
-        val items = arrayOf("Route als GPX bewaren", "Route offline opslaan", "Mijn ritten")
-        AlertDialog.Builder(this)
-            .setItems(items) { _, i ->
-                when (i) {
-                    0 -> exportGpx()
-                    1 -> downloadOffline()
-                    else -> openRides()
-                }
-            }
-            .setNegativeButton("Sluiten", null)
-            .show()
+        sheet("Meer", content = { d ->
+            column(
+                listRow("Route als GPX bewaren", "Voor een fietscomputer of andere app", glyph("\u2193")) { d.dismiss(); exportGpx() },
+                listRow("Route offline opslaan", "Kaart langs je route zonder bereik", glyph("\u2B07")) { d.dismiss(); downloadOffline() },
+                listRow("Mijn ritten", "Wat je gefietst hebt", glyph("\u2630")) { d.dismiss(); openRides() }
+            )
+        }, actions = listOf(SheetAction("Sluiten", false) {}))
     }
 
     private fun openRides() {
@@ -1625,47 +1786,53 @@ class MapActivity : Activity() {
             return
         }
         val date = SimpleDateFormat("EEE d MMM, HH:mm", Locale("nl", "NL"))
-        val labels = rides.map {
-            val avg = if (it.moving > 0) it.distance / (it.moving / 1000.0) else 0.0
-            date.format(Date(it.start)) + "\n" + formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + " \u00B7 gem. " + kmh(avg) + " km/u"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Mijn ritten")
-            .setItems(labels) { _, i -> rideActions(rides[i]) }
-            .setNegativeButton("Sluiten", null)
-            .show()
+        sheet("Mijn ritten", content = { d ->
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            for (it in rides) {
+                val avg = if (it.moving > 0) it.distance / (it.moving / 1000.0) else 0.0
+                val thumb: View? = if (it.thumb.size >= 4) RouteThumb(this, it.thumb).apply { layoutParams = LinearLayout.LayoutParams(dp(64), dp(64)) } else null
+                val row = listRow(
+                    date.format(Date(it.start)),
+                    formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + " \u00B7 gem. " + kmh(avg) + " km/u",
+                    thumb
+                ) {
+                    d.dismiss()
+                    rideActions(it)
+                }
+                c.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+            }
+            c
+        }, actions = listOf(SheetAction("Sluiten", false) {}))
     }
 
     private fun rideActions(r: RideInfo) {
-        AlertDialog.Builder(this)
-            .setTitle(r.name)
-            .setItems(arrayOf("Als GPX bewaren", "Verwijderen")) { _, i ->
-                if (i == 0) {
-                    pendingGpx = try {
-                        Rides.gpx(r.file)
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (pendingGpx == null) {
-                        Toast.makeText(this, "Deze rit kon niet worden gelezen", Toast.LENGTH_SHORT).show()
-                    } else {
-                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                            addCategory(Intent.CATEGORY_OPENABLE)
-                            type = "application/octet-stream"
-                            putExtra(Intent.EXTRA_TITLE, "rit-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date(r.start)) + ".gpx")
-                        }
-                        startActivityForResult(intent, REQ_GPX)
-                    }
-                } else {
-                    AlertDialog.Builder(this)
-                        .setMessage("Deze rit verwijderen?")
-                        .setPositiveButton("Verwijderen") { _, _ -> r.file.delete() }
-                        .setNegativeButton("Annuleren", null)
-                        .show()
+        sheet(r.name, actions = listOf(
+            SheetAction("Als GPX bewaren", true) {
+                pendingGpx = try {
+                    Rides.gpx(r.file)
+                } catch (_: Exception) {
+                    null
                 }
-            }
-            .setNegativeButton("Sluiten", null)
-            .show()
+                if (pendingGpx == null) {
+                    Toast.makeText(this, "Deze rit kon niet worden gelezen", Toast.LENGTH_SHORT).show()
+                } else {
+                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/octet-stream"
+                        putExtra(Intent.EXTRA_TITLE, "rit-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date(r.start)) + ".gpx")
+                    }
+                    startActivityForResult(intent, REQ_GPX)
+                }
+            },
+            SheetAction("Verwijderen", false) {
+                AlertDialog.Builder(this)
+                    .setMessage("Deze rit verwijderen?")
+                    .setPositiveButton("Verwijderen") { _, _ -> r.file.delete() }
+                    .setNegativeButton("Annuleren", null)
+                    .show()
+            },
+            SheetAction("Sluiten", false) {}
+        ))
     }
 
     private fun downloadOffline() {
@@ -1681,24 +1848,26 @@ class MapActivity : Activity() {
             return
         }
         val mb = max(1, tiles.size * 20 / 1024)
-        AlertDialog.Builder(this)
-            .setTitle("Route offline opslaan")
-            .setMessage("Dit haalt ongeveer ${tiles.size} kaartplaatjes (\u00B1 $mb MB) op, alleen langs je route. Doe dit met wifi of goed bereik.")
-            .setPositiveButton("Downloaden") { _, _ ->
-                setStatus("Offline kaart: 0/${tiles.size}")
-                Thread {
-                    OfflineTiles.download(map, tiles, { done, total ->
-                        ui.post { setStatus("Offline kaart: $done/$total") }
-                    }, { ok ->
-                        ui.post {
-                            setStatus("")
-                            Toast.makeText(this, "Offline kaart klaar ($ok plaatjes)", Toast.LENGTH_LONG).show()
-                        }
-                    })
-                }.start()
-            }
-            .setNegativeButton("Annuleren", null)
-            .show()
+        sheet(
+            "Route offline opslaan",
+            "Dit haalt ongeveer ${tiles.size} kaartplaatjes (\u00B1 $mb MB) op, alleen langs je route. Doe dit met wifi of goed bereik.",
+            actions = listOf(
+                SheetAction("Downloaden", true) {
+                    setStatus("Offline kaart: 0/${tiles.size}")
+                    Thread {
+                        OfflineTiles.download(map, tiles, { done, total ->
+                            ui.post { setStatus("Offline kaart: $done/$total") }
+                        }, { ok ->
+                            ui.post {
+                                setStatus("")
+                                Toast.makeText(this, "Offline kaart klaar ($ok plaatjes)", Toast.LENGTH_LONG).show()
+                            }
+                        })
+                    }.start()
+                },
+                SheetAction("Annuleren", false) {}
+            )
+        )
     }
 
     private fun exportGpx() {

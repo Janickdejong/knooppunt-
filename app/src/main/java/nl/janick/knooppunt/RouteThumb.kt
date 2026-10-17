@@ -13,7 +13,7 @@ import kotlin.math.min
 /** Een kleine tekening van de vorm van een route. pts = lat, lon, lat, lon, ... */
 class RouteThumb(context: Context, private val pts: DoubleArray) : View(context) {
     private val d = resources.displayMetrics.density
-    private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#F5F2EC") }
+    private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#F08A24")
         style = Paint.Style.STROKE
