@@ -65,6 +65,8 @@ class MapActivity : Activity() {
     private val night = Color.parseColor("#0E1726")
     private val mint = Color.parseColor("#9ADBC8")
     private val warn = Color.parseColor("#8E2F22")
+    private val navGreen = Color.parseColor("#1E8E4E")
+    private val navGreenDark = Color.parseColor("#146B3A")
 
     private lateinit var prefs: SharedPreferences
     private lateinit var map: MapView
@@ -122,6 +124,18 @@ class MapActivity : Activity() {
     private lateinit var etaMain: TextView
     private lateinit var etaSub: TextView
     private lateinit var speedView: TextView
+    private lateinit var navMain: LinearLayout
+    private lateinit var thenBar: LinearLayout
+    private lateinit var thenIcon: TurnArrowView
+    private lateinit var thenText: TextView
+    private lateinit var muteButton: TextView
+    private lateinit var zoomInButton: TextView
+    private lateinit var zoomOutButton: TextView
+    private lateinit var voice: Voice
+    private val spoken = HashSet<String>()
+    private var zoomOffset = 0.0
+    private var ride: RideRecorder? = null
+    private var pendingGpx: String? = null
     private lateinit var locateButton: TextView
     private var heading = -1f
     private var smoothHeading = 0f
@@ -161,7 +175,9 @@ class MapActivity : Activity() {
         Configuration.getInstance().apply {
             userAgentValue = "Knooppunt (nl.janick.knooppunt)"
             osmdroidBasePath = File(cacheDir, "osmdroid")
-            osmdroidTileCache = File(cacheDir, "osmdroid/tiles")
+            osmdroidBasePath = File(filesDir, "osmdroid")
+            osmdroidTileCache = File(filesDir, "osmdroid/tiles")
+            expirationExtendedDuration = 14L * 24 * 3600 * 1000
         }
 
         val root = FrameLayout(this)
@@ -234,28 +250,26 @@ class MapActivity : Activity() {
             setMargins(dp(12), dp(12), dp(12), 0)
         })
 
-        // Navigatiekaart bovenin: bocht, afstand en volgend knooppunt.
+        // Navigatiebanner bovenin, zoals in een autonavigatie: groot pijltje, afstand en straat.
         navCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(night, 18)
+            visibility = View.GONE
+        }
+        navMain = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(navGreen, 18)
             elevation = dp(8).toFloat()
             setPadding(dp(14), dp(10), dp(14), dp(10))
-            visibility = View.GONE
         }
         val navTop = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        navIcon = TurnArrowView(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(mint)
-            }
-        }
-        navTop.addView(navIcon, LinearLayout.LayoutParams(dp(62), dp(62)))
+        navIcon = TurnArrowView(this).apply { setColor(Color.WHITE) }
+        navTop.addView(navIcon, LinearLayout.LayoutParams(dp(66), dp(66)))
         val navText = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, 0, 0)
+            setPadding(dp(12), 0, 0, 0)
         }
         navBig = TextView(this).apply {
             textSize = 34f
@@ -263,13 +277,15 @@ class MapActivity : Activity() {
             setTextColor(Color.WHITE)
         }
         navLine = TextView(this).apply {
-            textSize = 16f
-            setTextColor(mint)
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#E6F4EA"))
+            maxLines = 2
         }
         navText.addView(navBig)
         navText.addView(navLine)
         navTop.addView(navText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        navCard.addView(navTop)
+        navMain.addView(navTop)
         val nodeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -289,11 +305,33 @@ class MapActivity : Activity() {
         nodeRow.addView(navNodeBadge, LinearLayout.LayoutParams(dp(30), dp(30)))
         navNodeText = TextView(this).apply {
             textSize = 14f
-            setTextColor(Color.parseColor("#B7C3D4"))
+            setTextColor(Color.parseColor("#CFEBDD"))
             setPadding(dp(10), 0, 0, 0)
         }
         nodeRow.addView(navNodeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        navCard.addView(nodeRow)
+        navMain.addView(nodeRow)
+        navCard.addView(navMain, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // De bocht daarna, klein onder de banner.
+        thenBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(navGreenDark, 14)
+            elevation = dp(6).toFloat()
+            setPadding(dp(14), dp(5), dp(12), dp(5))
+            visibility = View.GONE
+        }
+        thenText = TextView(this).apply {
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }
+        thenIcon = TurnArrowView(this).apply { setColor(Color.WHITE) }
+        thenBar.addView(thenText)
+        thenBar.addView(thenIcon, LinearLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = dp(6) })
+        navCard.addView(thenBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(6)
+            leftMargin = dp(10)
+        })
         root.addView(navCard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.TOP
             setMargins(dp(12), dp(12), dp(12), 0)
@@ -312,7 +350,7 @@ class MapActivity : Activity() {
         etaMain = TextView(this).apply {
             textSize = 21f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#8BE0A8"))
         }
         etaSub = TextView(this).apply {
             textSize = 14f
@@ -382,7 +420,7 @@ class MapActivity : Activity() {
         row.addView(textButton("Wis") { clearRoute() })
         row.addView(textButton("Opslaan") { saveRoute() })
         row.addView(textButton("Routes") { openRoutes() })
-        row.addView(textButton("GPX") { exportGpx() })
+        row.addView(textButton("Meer") { openMore() })
         bottomBar.addView(row)
         root.addView(bottomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.BOTTOM
@@ -406,23 +444,40 @@ class MapActivity : Activity() {
             setMargins(0, 0, dp(14), dp(150))
         })
 
-        // Kaartstijl: automatisch (donker 's avonds), altijd dag of altijd nacht.
-        styleButton = TextView(this).apply {
-            textSize = 12f
+        // Ronde knoppen rechts: kaartstijl, geluid en in- of uitzoomen.
+        fun roundButton(label: String, size: Float, onClick: () -> Unit): TextView = TextView(this).apply {
+            text = label
+            textSize = size
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(ink)
             gravity = Gravity.CENTER
-            background = rounded(Color.WHITE, 17)
-            elevation = dp(6).toFloat()
-            setOnClickListener {
-                styleMode = (styleMode + 1) % 3
-                prefs.edit().putInt("style", styleMode).apply()
-                applyStyle()
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.WHITE)
             }
+            elevation = dp(6).toFloat()
+            setOnClickListener { onClick() }
         }
-        root.addView(styleButton, FrameLayout.LayoutParams(dp(58), dp(34)).apply {
+        styleButton = roundButton("Auto", 11f) {
+            styleMode = (styleMode + 1) % 3
+            prefs.edit().putInt("style", styleMode).apply()
+            applyStyle()
+        }
+        voice = Voice(this)
+        voice.muted = prefs.getBoolean("muted", false)
+        muteButton = roundButton(if (voice.muted) "\uD83D\uDD07" else "\uD83D\uDD0A", 18f) { toggleMute() }
+        zoomInButton = roundButton("+", 26f) { nudgeZoom(0.7) }
+        zoomOutButton = roundButton("\u2212", 26f) { nudgeZoom(-0.7) }
+        val side = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        for (b in listOf(styleButton, muteButton, zoomInButton, zoomOutButton)) {
+            side.addView(b, LinearLayout.LayoutParams(dp(46), dp(46)).apply { topMargin = dp(10) })
+        }
+        root.addView(side, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            setMargins(0, 0, dp(14), 0)
+            setMargins(0, 0, dp(12), 0)
         })
         styleMode = prefs.getInt("style", 0)
         applyStyle()
@@ -523,6 +578,7 @@ class MapActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        voice.shutdown()
         io.shutdown()
     }
 
@@ -574,6 +630,7 @@ class MapActivity : Activity() {
             if (location.hasSpeed() && location.speed > 1.5f) {
                 avgSpeed = if (avgSpeed == 0.0) location.speed.toDouble() else avgSpeed * 0.9 + location.speed * 0.1
             }
+            ride?.add(location)
             updateNavigation(here)
             updateSpeed(location)
             followMe(here)
@@ -604,6 +661,7 @@ class MapActivity : Activity() {
         val kmh = (avgSpeed * 3.6)
         var target = if (kmh < 12.0) 17.8 else if (kmh < 22.0) 17.4 else 17.0
         if (turnDist < 70.0) target = 18.4 else if (turnDist < 160.0) target = maxOf(target, 17.9)
+        target += zoomOffset
         navZoom += (target - navZoom) * 0.18
         map.controller.setZoom(navZoom)
         if (h < 0f) {
@@ -834,6 +892,10 @@ class MapActivity : Activity() {
         navCard.visibility = if (navigating) View.VISIBLE else View.GONE
         navBar.visibility = if (navigating) View.VISIBLE else View.GONE
         speedView.visibility = if (navigating) View.VISIBLE else View.GONE
+        val navOnly = if (navigating) View.VISIBLE else View.GONE
+        muteButton.visibility = navOnly
+        zoomInButton.visibility = navOnly
+        zoomOutButton.visibility = navOnly
         findTopCard().visibility = if (navigating) View.GONE else View.VISIBLE
         startButton.visibility = if (!navigating && legs.isNotEmpty()) View.VISIBLE else View.GONE
         overlay.navigating = navigating
@@ -888,6 +950,9 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        spoken.clear()
+        zoomOffset = 0.0
+        ride = RideRecorder()
         applyStyle()
         clearGuide()
         navFitted = false
@@ -917,6 +982,9 @@ class MapActivity : Activity() {
     }
 
     private fun stopNavigation() {
+        voice.stop()
+        val finished = ride
+        ride = null
         navigating = false
         applyStyle()
         clearGuide()
@@ -926,6 +994,7 @@ class MapActivity : Activity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
         map.invalidate()
+        if (finished != null) finishRide(finished)
     }
 
     private fun renderNav(mode: Int, angle: Float, big: String, line: String, nodeRef: String, nodeText: String, off: Boolean) {
@@ -936,15 +1005,60 @@ class MapActivity : Activity() {
         navNodeBadge.text = nodeRef
         navNodeBadge.textSize = if (nodeRef.length > 2) 11f else 14f
         navNodeText.text = nodeText
-        navCard.background = rounded(if (off) warn else night, 18)
+        navMain.background = rounded(if (off) warn else navGreen, 18)
     }
 
-    /** Bocht of rechtdoor: symbool, grote afstand en een regel eronder. */
-    private fun maneuver(turn: Pair<Double, Int>?, toTarget: Double, straight: String): Triple<Int, String, String> {
-        if (turn == null) return Triple(TurnArrowView.STRAIGHT, formatDistance(toTarget), straight)
-        val word = if (turn.second > 0) "Rechtsaf" else "Linksaf"
-        val mode = if (turn.second > 0) TurnArrowView.RIGHT else TurnArrowView.LEFT
-        return Triple(mode, if (turn.first < 25) "Nu" else formatDistance(turn.first), word)
+    private fun turnWord(dir: Int) = if (dir > 0) "Rechtsaf" else "Linksaf"
+    private fun turnMode(dir: Int) = if (dir > 0) TurnArrowView.RIGHT else TurnArrowView.LEFT
+
+    private fun say(text: String) {
+        voice.speak(text)
+    }
+
+    /** Bocht of rechtdoor: symbool, afstand en straatnaam; zegt het ook hardop. */
+    private fun guidance(track: Track?, tag: String, toTarget: Double, straight: String): Triple<Int, String, String> {
+        val turns = if (track != null) track.turnsAhead(400.0, 2) else emptyList()
+        val t = turns.firstOrNull()
+        if (track != null) for (x in turns) Streets.ensure(track.pointAfter(x.index))
+        val name = if (t != null && track != null) Streets.get(track.pointAfter(t.index))?.takeIf { it.isNotEmpty() } else null
+
+        val n = turns.getOrNull(1)
+        if (t != null && n != null && n.dist - t.dist < 250.0) {
+            thenText.text = "Daarna"
+            thenIcon.set(turnMode(n.dir), 0f)
+            thenBar.visibility = View.VISIBLE
+        } else {
+            thenBar.visibility = View.GONE
+        }
+
+        if (t == null) return Triple(TurnArrowView.STRAIGHT, formatDistance(toTarget), straight)
+        val word = turnWord(t.dir)
+        val key = tag + t.index
+        val spokenName = if (name != null) " naar $name" else ""
+        if (t.dist <= 45.0) {
+            if (spoken.add(key + "b")) {
+                spoken.add(key + "a")
+                say("Nu " + word.lowercase() + spokenName)
+            }
+        } else if (t.dist <= 230.0 && spoken.add(key + "a")) {
+            val m = (t.dist / 10.0).roundToInt() * 10
+            say("Over $m meter " + word.lowercase() + spokenName)
+        }
+        val line = word + (if (name != null) " naar $name" else "")
+        return Triple(turnMode(t.dir), if (t.dist < 25) "Nu" else formatDistance(t.dist), line)
+    }
+
+    private fun toggleMute() {
+        voice.muted = !voice.muted
+        if (voice.muted) voice.stop()
+        prefs.edit().putBoolean("muted", voice.muted).apply()
+        muteButton.text = if (voice.muted) "\uD83D\uDD07" else "\uD83D\uDD0A"
+    }
+
+    private fun nudgeZoom(delta: Double) {
+        zoomOffset = (zoomOffset + delta).coerceIn(-2.5, 2.0)
+        navZoom = (navZoom + delta).coerceIn(10.0, 20.0)
+        map.controller.setZoom(navZoom)
     }
 
     private fun relativeBearing(here: GeoPoint, goal: GeoPoint): Float {
@@ -1000,11 +1114,20 @@ class MapActivity : Activity() {
         while (k < routeNodes.size && navNodeIdx[k] <= navProgress + 2) k++
 
         if (k != navNext) {
-            if (navNext != -1) map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            if (navNext != -1) {
+                map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                val reached = routeNodes[navNext].ref
+                if (k < routeNodes.size) say("Knooppunt $reached. Volgende knooppunt ${routeNodes[k].ref}") else say("Je bent aangekomen bij knooppunt $reached")
+            }
             navNext = k
         }
         val justOff = off && !wasOffRoute
-        if (justOff && !toStart) map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        if (justOff && !toStart) {
+            map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            say("Je bent van de route af")
+        }
+        if (!off && wasOffRoute && navProgress > 0) say("Je bent weer op de route")
+        if (toStart && spoken.add("start")) say("Ga eerst naar het startpunt, knooppunt ${routeNodes[0].ref}")
         wasOffRoute = off
 
         if (k >= routeNodes.size) {
@@ -1030,10 +1153,11 @@ class MapActivity : Activity() {
             val what = if (toStart) "Startpunt" else "Terug naar de route"
             if (g != null) {
                 val left = g.remaining() + g.locate(here)
-                val m = maneuver(g.turnAhead(), left, if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
+                val m = guidance(g, "g", left, if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
                 renderNav(m.first, 0f, m.second, m.third, goalNode.ref, "$what \u00B7 ${formatDistance(left)}", !toStart)
                 remainingAll = if (toStart) left + navCum[navCum.size - 1] else left + remaining
             } else {
+                thenBar.visibility = View.GONE
                 val straight = here.distanceToAsDouble(goal)
                 val line = if (guideFetching) "Route zoeken\u2026" else "Ga in deze richting"
                 renderNav(TurnArrowView.POINTER, relativeBearing(here, goal), formatDistance(straight), line, goalNode.ref, "$what \u00B7 ${formatDistance(straight)}", !toStart)
@@ -1046,7 +1170,7 @@ class MapActivity : Activity() {
             }
             overlay.nextId = next.id
             mainTrack?.progress = navProgress
-            val m = maneuver(mainTrack?.turnAhead(), toNext, "Rechtdoor")
+            val m = guidance(mainTrack, "m", toNext, "Rechtdoor")
             val nodeText = "${formatDistance(toNext)} naar knooppunt ${next.ref}" +
                 (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
             renderNav(m.first, 0f, m.second, m.third, next.ref, nodeText, false)
@@ -1259,7 +1383,128 @@ class MapActivity : Activity() {
         scheduleLoad()
     }
 
+    private fun formatDuration(ms: Long): String {
+        val minutes = (ms / 60000.0).roundToInt()
+        return if (minutes >= 60) "${minutes / 60} u ${minutes % 60} min" else "$minutes min"
+    }
+
+    private fun kmh(ms: Double): String = String.format(Locale("nl", "NL"), "%.1f", ms * 3.6)
+
+    private fun finishRide(r: RideRecorder) {
+        if (r.distance < 300.0) return
+        val msg = formatKm(r.distance) + " in " + formatDuration(r.movingMs) +
+            "\nGemiddeld " + kmh(r.avgSpeed()) + " km/u \u00B7 max " + kmh(r.maxSpeed) + " km/u"
+        val name = routeName()
+        AlertDialog.Builder(this)
+            .setTitle("Rit klaar")
+            .setMessage(msg)
+            .setPositiveButton("Bewaren") { _, _ ->
+                io.execute { Rides.save(applicationContext, r, name) }
+                Toast.makeText(this, "Rit bewaard bij Meer \u203A Mijn ritten", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Weggooien", null)
+            .show()
+    }
+
+    private fun openMore() {
+        val items = arrayOf("Route als GPX bewaren", "Route offline opslaan", "Mijn ritten")
+        AlertDialog.Builder(this)
+            .setItems(items) { _, i ->
+                when (i) {
+                    0 -> exportGpx()
+                    1 -> downloadOffline()
+                    else -> openRides()
+                }
+            }
+            .setNegativeButton("Sluiten", null)
+            .show()
+    }
+
+    private fun openRides() {
+        val rides = Rides.list(this)
+        if (rides.isEmpty()) {
+            Toast.makeText(this, "Je hebt nog geen ritten bewaard", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val date = SimpleDateFormat("EEE d MMM, HH:mm", Locale("nl", "NL"))
+        val labels = rides.map {
+            val avg = if (it.moving > 0) it.distance / (it.moving / 1000.0) else 0.0
+            date.format(Date(it.start)) + "\n" + formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + " \u00B7 gem. " + kmh(avg) + " km/u"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Mijn ritten")
+            .setItems(labels) { _, i -> rideActions(rides[i]) }
+            .setNegativeButton("Sluiten", null)
+            .show()
+    }
+
+    private fun rideActions(r: RideInfo) {
+        AlertDialog.Builder(this)
+            .setTitle(r.name)
+            .setItems(arrayOf("Als GPX bewaren", "Verwijderen")) { _, i ->
+                if (i == 0) {
+                    pendingGpx = try {
+                        Rides.gpx(r.file)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (pendingGpx == null) {
+                        Toast.makeText(this, "Deze rit kon niet worden gelezen", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "application/octet-stream"
+                            putExtra(Intent.EXTRA_TITLE, "rit-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date(r.start)) + ".gpx")
+                        }
+                        startActivityForResult(intent, REQ_GPX)
+                    }
+                } else {
+                    AlertDialog.Builder(this)
+                        .setMessage("Deze rit verwijderen?")
+                        .setPositiveButton("Verwijderen") { _, _ -> r.file.delete() }
+                        .setNegativeButton("Annuleren", null)
+                        .show()
+                }
+            }
+            .setNegativeButton("Sluiten", null)
+            .show()
+    }
+
+    private fun downloadOffline() {
+        if (legs.isEmpty()) {
+            Toast.makeText(this, "Kies eerst minstens twee knooppunten", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pts = ArrayList<GeoPoint>()
+        for (l in legs) pts.addAll(l.pts)
+        val tiles = OfflineTiles.plan(pts)
+        if (tiles.size > 6000) {
+            Toast.makeText(this, "Deze route is te lang om in \u00E9\u00E9n keer offline te zetten", Toast.LENGTH_LONG).show()
+            return
+        }
+        val mb = max(1, tiles.size * 20 / 1024)
+        AlertDialog.Builder(this)
+            .setTitle("Route offline opslaan")
+            .setMessage("Dit haalt ongeveer ${tiles.size} kaartplaatjes (\u00B1 $mb MB) op, alleen langs je route. Doe dit met wifi of goed bereik.")
+            .setPositiveButton("Downloaden") { _, _ ->
+                setStatus("Offline kaart: 0/${tiles.size}")
+                Thread {
+                    OfflineTiles.download(map, tiles, { done, total ->
+                        ui.post { setStatus("Offline kaart: $done/$total") }
+                    }, { ok ->
+                        ui.post {
+                            setStatus("")
+                            Toast.makeText(this, "Offline kaart klaar ($ok plaatjes)", Toast.LENGTH_LONG).show()
+                        }
+                    })
+                }.start()
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
     private fun exportGpx() {
+        pendingGpx = null
         if (legs.isEmpty()) {
             Toast.makeText(this, "Kies eerst minstens twee knooppunten", Toast.LENGTH_SHORT).show()
             return
@@ -1297,7 +1542,8 @@ class MapActivity : Activity() {
         if (requestCode == REQ_GPX && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
             try {
-                contentResolver.openOutputStream(uri)?.use { it.write(buildGpx().toByteArray()) }
+                contentResolver.openOutputStream(uri)?.use { it.write((pendingGpx ?: buildGpx()).toByteArray()) }
+                pendingGpx = null
                 Toast.makeText(this, "GPX opgeslagen", Toast.LENGTH_SHORT).show()
             } catch (_: Exception) {
                 Toast.makeText(this, "Opslaan is niet gelukt", Toast.LENGTH_SHORT).show()

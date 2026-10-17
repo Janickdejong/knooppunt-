@@ -6,6 +6,8 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
+class Turn(val dist: Double, val dir: Int, val index: Int)
+
 /** Een lijn om te volgen: punten om de ~10 m, met afstanden, voortgang en bochten. */
 class Track(raw: List<GeoPoint>, densify: Boolean = true) {
     val pts: List<GeoPoint>
@@ -101,4 +103,34 @@ class Track(raw: List<GeoPoint>, densify: Boolean = true) {
         }
         return null
     }
+
+    /** De eerstvolgende bochten (binnen maxDist): afstand, richting (1 = rechts) en plek op de lijn. */
+    fun turnsAhead(maxDist: Double = 300.0, count: Int = 2): List<Turn> {
+        val out = ArrayList<Turn>()
+        var i = max(progress, 3)
+        while (i + 3 < pts.size && cum[i] - cum[progress] <= maxDist && out.size < count) {
+            val angle = turnAngle(i)
+            if (abs(angle) >= 45) {
+                var bestIndex = i
+                var bestAngle = angle
+                var j = i + 1
+                while (j < i + 6 && j + 3 < pts.size) {
+                    val a = turnAngle(j)
+                    if (abs(a) > abs(bestAngle)) {
+                        bestAngle = a
+                        bestIndex = j
+                    }
+                    j++
+                }
+                out.add(Turn(cum[bestIndex] - cum[progress], if (bestAngle > 0) 1 else -1, bestIndex))
+                i = bestIndex + 6
+            } else {
+                i++
+            }
+        }
+        return out
+    }
+
+    /** Een punt kort na de bocht: daar ligt de straat waarin je afslaat. */
+    fun pointAfter(index: Int): GeoPoint = pts[min(pts.size - 1, index + 4)]
 }

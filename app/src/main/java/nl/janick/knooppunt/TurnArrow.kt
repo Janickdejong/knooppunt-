@@ -12,7 +12,7 @@ import kotlin.math.min
 class TurnArrowView(context: Context) : View(context) {
     private var mode = STRAIGHT
     private var angle = 0f
-    private val ink = Color.parseColor("#0E1726")
+    private var ink = Color.parseColor("#0E1726")
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = ink
@@ -24,6 +24,13 @@ class TurnArrowView(context: Context) : View(context) {
         color = ink
     }
     private val path = Path()
+
+    fun setColor(color: Int) {
+        ink = color
+        line.color = color
+        head.color = color
+        invalidate()
+    }
 
     fun set(mode: Int, angle: Float) {
         this.mode = mode
