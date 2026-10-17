@@ -25,14 +25,19 @@ jobs:
           sudo apt-get install -y -qq osmium-tool
           curl -sSL --retry 3 -o nl.osm.pbf https://download.geofabrik.de/europe/netherlands-latest.osm.pbf
           osmium tags-filter nl.osm.pbf r/network=rcn n/rcn_ref -o nl.filtered.pbf --overwrite
+          # Plaatsnamen (stad, dorp, gehucht) voor "Onderweg verkennen", zonder internet te gebruiken.
+          osmium tags-filter nl.osm.pbf n/place=city,town,village,hamlet -o nl.places.pbf --overwrite || true
           rm -f nl.osm.pbf
           FILES="nl.filtered.pbf"
+          PLACES=""
+          [ -f nl.places.pbf ] && PLACES="nl.places.pbf"
           # Aangrenzende gebieden: Vlaanderen/België en de Duitse grensdeelstaten. Mislukt er een, dan gaat het zonder verder.
           for gebied in europe/belgium europe/germany/nordrhein-westfalen europe/germany/niedersachsen; do
             naam=$(basename "$gebied")
             if curl -sSL --retry 3 -o "$naam.osm.pbf" "https://download.geofabrik.de/$gebied-latest.osm.pbf" \
               && osmium tags-filter "$naam.osm.pbf" r/network=rcn n/rcn_ref -o "$naam.filtered.pbf" --overwrite; then
               FILES="$FILES $naam.filtered.pbf"
+              osmium tags-filter "$naam.osm.pbf" n/place=city,town,village,hamlet -o "$naam.places.pbf" --overwrite && PLACES="$PLACES $naam.places.pbf"
             else
               echo "Overgeslagen: $naam"
             fi
@@ -41,6 +46,9 @@ jobs:
           osmium merge $FILES -o gefilterd.osm --overwrite
           mkdir -p app/src/main/assets
           python3 tools/build_data.py gefilterd.osm app/src/main/assets/knooppunten.json
+          if [ -n "$PLACES" ]; then
+            osmium merge $PLACES -o plaatsen.osm --overwrite && python3 tools/build_places.py plaatsen.osm app/src/main/assets/plaatsen.json || echo "Plaatsnamen overgeslagen"
+          fi
           ls -la app/src/main/assets
 
       - uses: actions/setup-java@v4

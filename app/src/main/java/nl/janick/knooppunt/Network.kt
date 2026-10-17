@@ -677,3 +677,45 @@ object Bundled {
         }
     }
 }
+
+/** Plaatsnamen die bij het bouwen in de app zijn gezet (assets/plaatsen.json); werkt zonder internet. */
+object Places {
+    @Volatile private var all: List<Town>? = null
+    @Volatile private var tried = false
+
+    @Synchronized
+    fun load(context: Context): List<Town>? {
+        if (tried) return all
+        tried = true
+        all = try {
+            val text = context.assets.open("plaatsen.json").bufferedReader().use { it.readText() }
+            val arr = org.json.JSONArray(text)
+            val kinds = mapOf("c" to "city", "t" to "town", "v" to "village", "h" to "hamlet")
+            val out = ArrayList<Town>(arr.length())
+            for (i in 0 until arr.length()) {
+                val a = arr.getJSONArray(i)
+                out.add(Town(a.getString(0), kinds[a.getString(1)] ?: "hamlet", GeoPoint(a.getInt(2) / 1e5, a.getInt(3) / 1e5), 0, null))
+            }
+            out
+        } catch (_: Exception) {
+            null
+        }
+        return all
+    }
+
+    /** Plaatsen tot `radius` meter van de lijn. */
+    fun near(list: List<Town>, line: List<GeoPoint>, radius: Double = 1500.0): List<Town> {
+        val pad = radius / 111000.0 * 1.2
+        val minLat = line.minOf { it.latitude } - pad
+        val maxLat = line.maxOf { it.latitude } + pad
+        val minLon = line.minOf { it.longitude } - pad * 1.7
+        val maxLon = line.maxOf { it.longitude } + pad * 1.7
+        val step = maxOf(1, line.size / 2000)
+        val sample = (line.indices step step).map { line[it] } + line.last()
+        return list.filter { t ->
+            val la = t.pos.latitude
+            val lo = t.pos.longitude
+            la in minLat..maxLat && lo in minLon..maxLon && sample.any { it.distanceToAsDouble(t.pos) < radius }
+        }
+    }
+}
