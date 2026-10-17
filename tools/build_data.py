@@ -25,6 +25,7 @@ class Collector:
         self.nodes = {}  # id -> (ref, lat, lon), alleen knooppunten met rcn_ref
         self.ways = {}   # id -> [node ids]
         self.loc = {}    # node id -> (lat, lon)
+        self.oneway = {} # way id -> 1 (vooruit) of -1 (achteruit), alleen voor fietsers
         self.rels = []   # (id, ref, name, note, [way ids])
 
     def read(self, src):
@@ -42,7 +43,11 @@ class Collector:
             elif tag == "way":
                 ids = [int(n.get("ref")) for n in el.findall("nd") if int(n.get("ref")) in loc]
                 if len(ids) >= 2:
-                    self.ways[int(el.get("id"))] = ids
+                    wid = int(el.get("id"))
+                    self.ways[wid] = ids
+                    d = oneway_dir({t.get("k"): t.get("v") for t in el.findall("tag")})
+                    if d:
+                        self.oneway[wid] = d
                 el.clear()
             elif tag == "relation":
                 tags = {t.get("k"): t.get("v") for t in el.findall("tag")}
@@ -50,6 +55,17 @@ class Collector:
                     ways = [int(m.get("ref")) for m in el.findall("member") if m.get("type") == "way"]
                     self.rels.append((int(el.get("id")), tags.get("ref") or "", tags.get("name") or "", tags.get("note") or "", ways))
                 el.clear()
+
+
+def oneway_dir(tags):
+    """1 = alleen vooruit, -1 = alleen achteruit, 0 = beide kanten, voor fietsers."""
+    v = tags.get("oneway:bicycle") or tags.get("oneway")
+    if v is None and tags.get("junction") in ("roundabout", "circular"):
+        v = "yes"
+    d = 1 if v in ("yes", "true", "1") else -1 if v in ("-1", "reverse") else 0
+    if d and any((tags.get(k) or "").startswith("opposite") for k in ("cycleway", "cycleway:left", "cycleway:right", "cycleway:both")):
+        d = 0
+    return d
 
 
 def dist(a, b):
@@ -64,8 +80,10 @@ def norm(ref):
     return ref.strip().lstrip("0") or "0"
 
 
-def way_graph(way_ids, ways, loc):
-    """Graaf van de wegstukken van een route: punt-id -> [(buur, afstand)]."""
+def way_graph(way_ids, ways, loc, oneway=None):
+    """Graaf van de wegstukken van een route: punt-id -> [(buur, afstand)].
+
+    Met oneway krijgen eenrichtingswegen maar één richting."""
     adj = {}
     for w in way_ids:
         ids = ways.get(w)
@@ -75,8 +93,13 @@ def way_graph(way_ids, ways, loc):
             if u == v:
                 continue
             d = dist(loc[u], loc[v])
-            adj.setdefault(u, []).append((v, d))
-            adj.setdefault(v, []).append((u, d))
+            way_dir = oneway.get(w, 0) if oneway else 0
+            if way_dir >= 0:
+                adj.setdefault(u, []).append((v, d))
+                adj.setdefault(v, [])
+            if way_dir <= 0:
+                adj.setdefault(v, []).append((u, d))
+                adj.setdefault(u, [])
     return adj
 
 
@@ -125,15 +148,16 @@ def shortest(adj, src, dst):
     return path[::-1]
 
 
-def bridge_gaps(adj, loc, maxd=150.0):
+def bridge_gaps(graphs, und, loc, maxd=150.0):
     """Verbindt losse uiteinden die dicht bij elkaar liggen (kleine gaten in de route)."""
-    ends = [n for n, nb in adj.items() if len(nb) == 1]
+    ends = [n for n, nb in und.items() if len(nb) == 1]
     for i, u in enumerate(ends):
         for v in ends[i + 1:]:
             d = dist(loc[u], loc[v])
             if d <= maxd:
-                adj[u].append((v, d))
-                adj[v].append((u, d))
+                for g in graphs:
+                    g.setdefault(u, []).append((v, d))
+                    g.setdefault(v, []).append((u, d))
 
 
 def simplify(pts, tol=3.0):
@@ -204,32 +228,49 @@ def main(src, dst):
         ra, rb = norm(m.group(1)), norm(m.group(2))
         if ra == rb:
             continue
-        adj = way_graph(way_ids, c.ways, c.loc)
-        if not adj:
+        und = way_graph(way_ids, c.ways, c.loc)
+        if not und:
             continue
-        a, na = nearest(by_ref.get(ra, []), adj, c.loc, c.nodes)
-        b, nb = nearest(by_ref.get(rb, []), adj, c.loc, c.nodes)
+        a, na = nearest(by_ref.get(ra, []), und, c.loc, c.nodes)
+        b, nb = nearest(by_ref.get(rb, []), und, c.loc, c.nodes)
         if a is None or b is None or a == b or na == nb:
             continue
-        path = shortest(adj, na, nb)
-        if path is None:
-            bridge_gaps(adj, c.loc)
-            path = shortest(adj, na, nb)
-        if path is None:
+        # Fietsers mogen op eenrichtingspaden maar één kant op: heen en terug kunnen dus een andere weg zijn.
+        adj = way_graph(way_ids, c.ways, c.loc, c.oneway)
+        fwd = shortest(adj, na, nb)
+        bwd = shortest(adj, nb, na)
+        if fwd is None or bwd is None:
+            bridge_gaps([und, adj], und, c.loc)
+            fwd = shortest(adj, na, nb)
+            bwd = shortest(adj, nb, na)
+        if fwd is None and bwd is None:
+            fwd = shortest(und, na, nb)
+            bwd = None
+        if fwd is None and bwd is not None:
+            fwd, bwd = bwd[::-1], None
+        if fwd is None:
             skipped += 1
             continue
+        if bwd is not None and bwd == fwd[::-1]:
+            bwd = None
         pa = (c.nodes[a][1], c.nodes[a][2])
         pb = (c.nodes[b][1], c.nodes[b][2])
-        pts = simplify([pa] + [c.loc[n] for n in path] + [pb])
-        edges.append((a, b, pts))
+        pts = simplify([pa] + [c.loc[n] for n in fwd] + [pb])
+        back = simplify([pb] + [c.loc[n] for n in bwd] + [pa]) if bwd is not None else None
+        edges.append((a, b, pts, back))
 
     print(f"{skipped} verbindingen overgeslagen (geen doorlopende weg)")
     used = sorted({e[0] for e in edges} | {e[1] for e in edges})
+    with_back = sum(1 for e in edges if e[3] is not None)
+    print(f"{with_back} verbindingen met een andere weg terug")
     index = {nid: i for i, nid in enumerate(used)}
     data = {
         "date": date.today().isoformat(),
         "nodes": [[nid, c.nodes[nid][0], round(c.nodes[nid][1], 6), round(c.nodes[nid][2], 6)] for nid in used],
-        "edges": [[index[a], index[b], encode(pts)] for a, b, pts in edges],
+        "edges": [
+            [index[a], index[b], encode(pts)] + ([encode(back)] if back else [])
+            for a, b, pts, back in edges
+        ],
     }
     with open(dst, "w", encoding="utf-8") as f:
         json.dump(data, f, separators=(",", ":"))

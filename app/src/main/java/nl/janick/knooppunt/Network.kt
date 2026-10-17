@@ -13,11 +13,12 @@ import java.util.PriorityQueue
 class KNode(val id: Long, val ref: String, val pos: GeoPoint)
 
 /** Een stuk fietsroute tussen twee knooppunten. De punten lopen van a naar b. */
-class KEdge(val a: KNode, val b: KNode, val pts: List<GeoPoint>, val length: Double) {
-    val minLat = pts.minOf { it.latitude }
-    val maxLat = pts.maxOf { it.latitude }
-    val minLon = pts.minOf { it.longitude }
-    val maxLon = pts.maxOf { it.longitude }
+class KEdge(val a: KNode, val b: KNode, val pts: List<GeoPoint>, val length: Double, val back: List<GeoPoint>? = null) {
+    private val all = if (back != null) pts + back else pts
+    val minLat = all.minOf { it.latitude }
+    val maxLat = all.maxOf { it.latitude }
+    val minLon = all.minOf { it.longitude }
+    val maxLon = all.maxOf { it.longitude }
 }
 
 /** Het stuk route tussen twee gekozen knooppunten. connected=false betekent: geen verbinding gevonden. */
@@ -70,7 +71,8 @@ class Network(val nodes: Map<Long, KNode>, val edges: List<KEdge>) {
         val pts = ArrayList<GeoPoint>()
         var length = 0.0
         for ((e, forward) in steps) {
-            val seq = if (forward) e.pts else e.pts.reversed()
+            // Een eenrichtingspad voor fietsers kan terug een andere weg zijn.
+            val seq = if (forward) e.pts else (e.back ?: e.pts.reversed())
             for ((i, p) in seq.withIndex()) {
                 if (i == 0 && pts.isNotEmpty()) continue
                 pts.add(p)
@@ -357,7 +359,8 @@ object Bundled {
                 if (pts.size < 2) continue
                 var length = 0.0
                 for (k in 1 until pts.size) length += pts[k - 1].distanceToAsDouble(pts[k])
-                edges.add(KEdge(list[e.getInt(0)], list[e.getInt(1)], pts, length))
+                val back = if (e.length() > 3) decode(e.getString(3)).takeIf { it.size >= 2 } else null
+                edges.add(KEdge(list[e.getInt(0)], list[e.getInt(1)], pts, length, back))
             }
             return if (edges.isEmpty()) null else Network(map, edges)
         } catch (_: Exception) {

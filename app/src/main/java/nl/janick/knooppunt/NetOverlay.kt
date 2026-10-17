@@ -116,6 +116,11 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 ) continue
                 addPath(pj, e.pts)
                 c.drawPath(path, edgePaint)
+                val back = e.back
+                if (back != null) {
+                    addPath(pj, back)
+                    c.drawPath(path, edgePaint)
+                }
             }
         }
 
