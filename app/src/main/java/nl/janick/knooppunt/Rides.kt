@@ -19,9 +19,16 @@ class RideRecorder {
     var distance = 0.0
     var maxSpeed = 0.0
     var movingMs = 0L
+    var paused = false
+    var endTime = 0L
     private var last: Location? = null
 
     fun add(l: Location) {
+        if (paused) {
+            // Tijdens een pauze telt er niets mee; wel onthouden waar je staat, zodat er na de pauze geen sprong komt.
+            last = Location(l)
+            return
+        }
         if (l.hasSpeed() && l.speed > maxSpeed && l.speed < 30f) maxSpeed = l.speed.toDouble()
         val p = last
         if (p == null) {
@@ -37,11 +44,11 @@ class RideRecorder {
         lat.add(l.latitude); lon.add(l.longitude); time.add(l.time)
     }
 
-    fun durationMs(): Long = System.currentTimeMillis() - startTime
+    fun durationMs(): Long = (if (endTime > 0) endTime else System.currentTimeMillis()) - startTime
     fun avgSpeed(): Double = if (movingMs > 0) distance / (movingMs / 1000.0) else 0.0
 }
 
-class RideInfo(val file: File, val name: String, val start: Long, val distance: Double, val moving: Long, val max: Double, val thumb: DoubleArray)
+class RideInfo(val file: File, val name: String, val start: Long, val distance: Double, val moving: Long, val max: Double, val thumb: DoubleArray, val total: Long = 0L)
 
 object Rides {
     private fun dir(ctx: Context) = File(ctx.filesDir, "rides").also { it.mkdirs() }
@@ -52,6 +59,7 @@ object Rides {
         o.put("start", r.startTime)
         o.put("dist", r.distance)
         o.put("moving", r.movingMs)
+        o.put("total", r.durationMs())
         o.put("max", r.maxSpeed)
         val pts = JSONArray()
         for (i in r.lat.indices) {
@@ -76,7 +84,7 @@ object Rides {
                     flat.add(p.getDouble(1))
                     i += step
                 }
-                out.add(RideInfo(f, o.optString("name"), o.optLong("start"), o.optDouble("dist"), o.optLong("moving"), o.optDouble("max"), flat.toDoubleArray()))
+                out.add(RideInfo(f, o.optString("name"), o.optLong("start"), o.optDouble("dist"), o.optLong("moving"), o.optDouble("max"), flat.toDoubleArray(), o.optLong("total")))
             } catch (_: Exception) {
             }
         }

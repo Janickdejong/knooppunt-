@@ -152,6 +152,8 @@ class MapActivity : Activity() {
     private var lastSpeed = 0f
     private var idleWait = false
     private lateinit var skipBtn: TextView
+    private lateinit var pauseBtn: TextView
+    private lateinit var etaNext: TextView
     private var skipBackup: List<Long>? = null
     private var camInit = false
     private var headingKnown = false
@@ -388,8 +390,15 @@ class MapActivity : Activity() {
             textSize = 14f
             setTextColor(Color.parseColor("#93A3B8"))
         }
+        etaNext = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
         etaColumn.addView(etaMain)
         etaColumn.addView(etaSub)
+        etaColumn.addView(etaNext)
         navBar.addView(etaColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val stop = TextView(this).apply {
             text = "Stop"
@@ -398,7 +407,7 @@ class MapActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = rounded(Color.parseColor("#C0392B"), 16)
-            setPadding(dp(24), dp(10), dp(24), dp(10))
+            setPadding(dp(18), dp(10), dp(18), dp(10))
             setOnClickListener { stopNavigation() }
         }
         skipBtn = TextView(this).apply {
@@ -408,9 +417,19 @@ class MapActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = rounded(Color.parseColor("#34465C"), 16)
-            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnClickListener { skipNext() }
         }
+        pauseBtn = TextView(this).apply {
+            text = "\u23F8"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = rounded(Color.parseColor("#34465C"), 16)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setOnClickListener { togglePause() }
+        }
+        navBar.addView(pauseBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
         navBar.addView(skipBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
         navBar.addView(stop)
         root.addView(navBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -876,7 +895,12 @@ class MapActivity : Activity() {
     /** Zet de doelen van de camera: plek, richting en zoom. De frames hieronder schuiven er vloeiend naartoe. */
     private fun followMe(here: GeoPoint) {
         val active = guide ?: mainTrack
-        if (heading >= 0f) {
+        val routeBearing = if (guide != null || !wasOffRoute) active?.bearingAhead() else null
+        if (routeBearing != null) {
+            // Op de route: de pijl en de kaart volgen de route, dus altijd de goede kant op.
+            targetHeading = routeBearing
+            headingKnown = true
+        } else if (heading >= 0f) {
             targetHeading = heading
             headingKnown = true
         } else if (!headingKnown) {
@@ -1309,6 +1333,8 @@ class MapActivity : Activity() {
         navigating = true
         skipBtn.visibility = if (trip == null) View.VISIBLE else View.GONE
         skipBackup = null
+        pauseBtn.text = "\u23F8"
+        pauseBtn.background = rounded(Color.parseColor("#34465C"), 16)
         computePassNodes()
         guideFailed = false
         spoken.clear()
@@ -1376,6 +1402,28 @@ class MapActivity : Activity() {
             rebuildRoute()
         }
         if (finished != null) finishRide(finished, tripName?.let { "Naar $it" })
+    }
+
+    private fun togglePause() {
+        val r = ride ?: return
+        r.paused = !r.paused
+        pauseBtn.text = if (r.paused) "\u25B6" else "\u23F8"
+        pauseBtn.background = rounded(if (r.paused) Color.parseColor("#C98A12") else Color.parseColor("#34465C"), 16)
+        Toast.makeText(this, if (r.paused) "Pauze: je rijtijd loopt niet door" else "Verder met fietsen", Toast.LENGTH_SHORT).show()
+        me?.let { updateNavigation(it) }
+    }
+
+    /** Toont onderin de komende knooppunten, met de afstand tot het eerstvolgende. */
+    private fun setUpcoming(first: Int, dist: Double) {
+        if (trip != null || first >= routeNodes.size) {
+            etaNext.visibility = View.GONE
+            return
+        }
+        etaNext.visibility = View.VISIBLE
+        val rest = routeNodes.drop(first + 1).map { it.ref }
+        val tail = if (rest.size > 3) rest.take(2) + "\u2026" + rest.last() else rest
+        etaNext.text = "Volgende " + routeNodes[first].ref + " \u00B7 " + formatDistance(dist) +
+            (if (tail.isNotEmpty()) "  \u2192  " + tail.joinToString(" \u2192 ") else "")
     }
 
     /** Het volgende knooppunt overslaan: de route loopt verder vanaf waar je nu bent. */
@@ -1481,7 +1529,7 @@ class MapActivity : Activity() {
         etaMain.text = if (minutes >= 60) "${minutes / 60} u ${minutes % 60} min" else "$minutes min"
         val arrive = Calendar.getInstance().apply { add(Calendar.SECOND, secs.toInt()) }
         val clock = String.format(Locale("nl", "NL"), "%02d:%02d", arrive.get(Calendar.HOUR_OF_DAY), arrive.get(Calendar.MINUTE))
-        etaSub.text = formatKm(meters) + " \u00B7 aankomst " + clock
+        etaSub.text = if (ride?.paused == true) "Pauze \u00B7 " + formatKm(meters) + " te gaan" else formatKm(meters) + " \u00B7 aankomst " + clock
     }
 
     private fun fitTo(a: GeoPoint, b: GeoPoint) {
@@ -1570,6 +1618,7 @@ class MapActivity : Activity() {
                 val left = g.remaining() + g.locate(here)
                 val m = guidance(g, "g", left, if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
                 renderNav(m.first, 0f, m.second, m.third, goalNode.ref, "$what \u00B7 ${formatDistance(left)}", !toStart)
+                setUpcoming(if (toStart) 0 else k, left)
                 remainingAll = if (toStart) left + navCum[navCum.size - 1] else left + remaining
             } else {
                 thenBar.visibility = View.GONE
@@ -1578,6 +1627,7 @@ class MapActivity : Activity() {
                 renderNav(TurnArrowView.POINTER, relativeBearing(here, goal), formatDistance(straight), line, goalNode.ref, "$what \u00B7 ${formatDistance(straight)}", !toStart)
                 remainingAll = (if (toStart) navCum[navCum.size - 1] else remaining) + straight
                 navFitted = true
+                setUpcoming(if (toStart) 0 else k, straight)
             }
         } else {
             if (guide != null) {
@@ -1590,6 +1640,7 @@ class MapActivity : Activity() {
                 "${formatDistance(toNext)} naar knooppunt ${next.ref}" +
                     (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
             renderNav(m.first, 0f, m.second, m.third, next.ref, nodeText, false)
+            setUpcoming(k, toNext)
         }
         updateEta(remainingAll)
     }
@@ -1986,18 +2037,21 @@ class MapActivity : Activity() {
     private fun finishRide(r: RideRecorder, tripTitle: String?) {
         if (r.distance < 300.0) return
         val name = tripTitle ?: routeName()
-        sheet("Rit klaar", "Max. snelheid " + kmh(r.maxSpeed) + " km/u", content = {
-            val g = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            val items = listOf(
-                formatKm(r.distance) to "afstand",
-                formatDuration(r.movingMs) to "tijd",
-                kmh(r.avgSpeed()) to "gem. km/u"
-            )
-            for ((i, it) in items.withIndex()) {
-                g.addView(statBlock(it.first, it.second), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    if (i > 0) leftMargin = dp(8)
-                })
+        r.endTime = System.currentTimeMillis()
+        val standing = (r.durationMs() - r.movingMs).coerceAtLeast(0L)
+        sheet("Rit klaar", "Totaal " + formatDuration(r.durationMs()) + " \u00B7 rijtijd " + formatDuration(r.movingMs), content = {
+            val g = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            fun row(items: List<Pair<String, String>>, top: Boolean) {
+                val h = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                for ((i, it) in items.withIndex()) {
+                    h.addView(statBlock(it.first, it.second), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        if (i > 0) leftMargin = dp(8)
+                    })
+                }
+                g.addView(h, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (!top) topMargin = dp(8) })
             }
+            row(listOf(formatKm(r.distance) to "afstand", formatDuration(r.movingMs) to "rijtijd", kmh(r.avgSpeed()) to "gem. km/u"), true)
+            row(listOf(formatDuration(r.durationMs()) to "totaal", formatDuration(standing) to "pauze/stil", kmh(r.maxSpeed) to "max km/u"), false)
             g
         }, actions = listOf(
             SheetAction("Bewaren", true) {
@@ -2075,7 +2129,7 @@ class MapActivity : Activity() {
                 val thumb: View? = if (it.thumb.size >= 4) RouteThumb(this, it.thumb).apply { layoutParams = LinearLayout.LayoutParams(dp(64), dp(64)) } else null
                 val row = listRow(
                     date.format(Date(it.start)),
-                    formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + " \u00B7 gem. " + kmh(avg) + " km/u",
+                    formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + (if (it.total > it.moving + 120000L) " (totaal " + formatDuration(it.total) + ")" else "") + " \u00B7 gem. " + kmh(avg) + " km/u",
                     thumb
                 ) {
                     d.dismiss()

@@ -66,6 +66,14 @@ class Track(raw: List<GeoPoint>, densify: Boolean = true) {
         return bestDist
     }
 
+    /** Richting van de lijn net voor je (ongeveer 25 m), of null als die er niet is. */
+    fun bearingAhead(): Float? {
+        val a = pts[min(progress, pts.size - 1)]
+        val b = pts[min(pts.size - 1, progress + 3)]
+        if (a.distanceToAsDouble(b) < 8.0) return null
+        return a.bearingTo(b).toFloat()
+    }
+
     fun remaining(): Double = cum[cum.size - 1] - cum[progress]
 
     /** Een punt zo'n 80 m verderop, om de richting te bepalen. */
