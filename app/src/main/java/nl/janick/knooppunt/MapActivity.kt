@@ -146,6 +146,22 @@ class MapActivity : Activity() {
     private var heading = -1f
     private var smoothHeading = 0f
     private var lastFix: GeoPoint? = null
+
+    // Vloeiende camera: de GPS geeft maar één keer per seconde een plek, daartussen schuift de kaart zelf mee.
+    private var lastSpeed = 0f
+    private var camInit = false
+    private var headingKnown = false
+    private var dispLat = 0.0
+    private var dispLon = 0.0
+    private var dispHeading = 0f
+    private var targetHeading = 0f
+    private var dispZoom = 17.3
+    private var targetZoom = 17.3
+    private var fixPos: GeoPoint? = null
+    private var fixTime = 0L
+    private var frameOn = false
+    private var lastFrameNs = 0L
+    private var wasFree = false
     private var navZoom = 17.3
     // Zolang je zelf de kaart verschuift of zoomt, blijft de kaart staan waar jij hem zet.
     private var freeUntil = 0L
@@ -803,15 +819,16 @@ class MapActivity : Activity() {
         meAccuracy = acc
         val here = GeoPoint(location.latitude, location.longitude)
         me = here
-        overlay.me = here
-        if (location.hasBearing() && location.speed > 0.7f) {
+        if (!navigating) overlay.me = here
+        lastSpeed = if (location.hasSpeed()) location.speed else 0f
+        // De richting van de GPS is pas betrouwbaar als je echt beweegt; stilstaand blijft de kaart zoals hij stond.
+        if (location.hasBearing() && location.speed >= 2f) {
             heading = location.bearing
-        } else {
-            // Geen richting van de GPS (langzaam of stilstaand): afleiden uit de verplaatsing.
+        } else if (!location.hasBearing() && location.speed >= 1.5f) {
             val last = lastFix
-            if (last != null && last.distanceToAsDouble(here) > 4.0) heading = last.bearingTo(here).toFloat()
+            if (last != null && last.distanceToAsDouble(here) > 8.0) heading = last.bearingTo(here).toFloat()
         }
-        if (lastFix == null || lastFix!!.distanceToAsDouble(here) > 4.0) lastFix = here
+        if (lastFix == null || lastFix!!.distanceToAsDouble(here) > 8.0) lastFix = here
         if (!centeredOnMe && !hadSavedCenter) {
             centeredOnMe = true
             map.controller.setZoom(14.0)
@@ -839,47 +856,97 @@ class MapActivity : Activity() {
         speedView.text = span
     }
 
-    /** De kaart draait mee met je rijrichting en jij staat lager in beeld, zoals in een autonavigatie. */
+    /** Zet de doelen van de camera: plek, richting en zoom. De frames hieronder schuiven er vloeiend naartoe. */
     private fun followMe(here: GeoPoint) {
-        if (System.currentTimeMillis() < freeUntil) return
         val active = guide ?: mainTrack
-        var h = heading
-        if (h < 0f) {
+        if (heading >= 0f) {
+            targetHeading = heading
+            headingKnown = true
+        } else if (!headingKnown) {
             // Nog niet bewogen: kijk naar de route, dan staat de kaart meteen goed.
             val a = active?.aim()
-            if (a != null && a.distanceToAsDouble(here) > 8.0) h = here.bearingTo(a).toFloat()
+            if (a != null && a.distanceToAsDouble(here) > 8.0) targetHeading = here.bearingTo(a).toFloat()
         }
         // Inzoomen in wijken: dichter bij een bocht en bij lage snelheid, wat verder weg op rechte stukken.
         val turnDist = active?.turnAhead(250.0)?.first ?: 999.0
-        val kmh = (avgSpeed * 3.6)
+        val kmh = avgSpeed * 3.6
         var target = if (kmh < 12.0) 17.8 else if (kmh < 22.0) 17.4 else 17.0
         if (turnDist < 70.0) target = 18.4 else if (turnDist < 160.0) target = maxOf(target, 17.9)
-        target += zoomOffset
-        navZoom += (target - navZoom) * 0.18
-        map.controller.setZoom(navZoom)
-        if (h < 0f) {
-            map.controller.animateTo(here)
-            return
+        targetZoom = (target + zoomOffset).coerceIn(10.0, 20.0)
+
+        fixPos = here
+        fixTime = System.currentTimeMillis()
+        if (!camInit) {
+            camInit = true
+            dispLat = here.latitude
+            dispLon = here.longitude
+            dispHeading = targetHeading
+            dispZoom = navZoom
         }
-        heading = h
-        var d = heading - smoothHeading
+        if (!frameOn) {
+            frameOn = true
+            lastFrameNs = 0L
+            map.postOnAnimation(frame)
+        }
+    }
+
+    private fun angleDiff(to: Float, from: Float): Float {
+        var d = to - from
         while (d > 180f) d -= 360f
         while (d < -180f) d += 360f
-        smoothHeading = (smoothHeading + d * 0.4f + 360f) % 360f
-        map.mapOrientation = -smoothHeading
-        overlay.meHeading = smoothHeading
+        return d
+    }
 
-        val pj = map.projection
-        val p0 = android.graphics.Point()
-        val p1 = android.graphics.Point()
-        pj.toPixels(here, p0)
-        pj.toPixels(here.destinationPoint(100.0, 0.0), p1)
-        val px = hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble())
-        if (px > 0.5) {
-            val meters = map.height * 0.22 * (100.0 / px)
-            map.controller.animateTo(here.destinationPoint(meters, smoothHeading.toDouble()))
-        } else {
-            map.controller.animateTo(here)
+    private val frame = object : Runnable {
+        override fun run() {
+            if (!navigating) {
+                frameOn = false
+                return
+            }
+            val nowNs = System.nanoTime()
+            val dt = if (lastFrameNs == 0L) 0.016 else ((nowNs - lastFrameNs) / 1e9).coerceIn(0.001, 0.1)
+            lastFrameNs = nowNs
+            val fp = fixPos
+            val free = System.currentTimeMillis() < freeUntil
+            if (!free && wasFree) {
+                // Je liet de kaart los: ga verder vanaf hoe hij nu staat, zonder sprong.
+                dispZoom = map.zoomLevelDouble
+                dispHeading = ((-map.mapOrientation % 360f) + 360f) % 360f
+            }
+            wasFree = free
+            if (fp != null) {
+                // Tussen twee GPS-plekken doorlopen in de rijrichting, zodat de beweging niet hapert.
+                var tLat = fp.latitude
+                var tLon = fp.longitude
+                val age = ((System.currentTimeMillis() - fixTime) / 1000.0).coerceIn(0.0, 1.5)
+                if (lastSpeed >= 1.5f && headingKnown) {
+                    val ahead = fp.destinationPoint(lastSpeed * age, targetHeading.toDouble())
+                    tLat = ahead.latitude
+                    tLon = ahead.longitude
+                }
+                val kp = 1.0 - Math.exp(-dt / 0.30)
+                dispLat += (tLat - dispLat) * kp
+                dispLon += (tLon - dispLon) * kp
+                dispHeading = (dispHeading + angleDiff(targetHeading, dispHeading) * (1.0 - Math.exp(-dt / 0.6)).toFloat() + 360f) % 360f
+                dispZoom += (targetZoom - dispZoom) * (1.0 - Math.exp(-dt / 0.9))
+                val pos = GeoPoint(dispLat, dispLon)
+                overlay.me = pos
+                overlay.meHeading = dispHeading
+                if (!free) {
+                    map.mapOrientation = -dispHeading
+                    map.controller.setZoom(dispZoom)
+                    val pj = map.projection
+                    val p0 = android.graphics.Point()
+                    val p1 = android.graphics.Point()
+                    pj.toPixels(pos, p0)
+                    pj.toPixels(pos.destinationPoint(100.0, 0.0), p1)
+                    val px = hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble())
+                    val center = if (px > 0.5) pos.destinationPoint(map.height * 0.22 * (100.0 / px), dispHeading.toDouble()) else pos
+                    map.controller.setCenter(center)
+                }
+                map.invalidate()
+            }
+            map.postOnAnimation(this)
         }
     }
 
@@ -1168,6 +1235,10 @@ class MapActivity : Activity() {
         val here = if (meAccuracy <= 75f) me else null
         navZoom = 17.3
         freeUntil = 0L
+        camInit = false
+        headingKnown = false
+        wasFree = false
+        fixPos = null
         lastFix = null
         map.controller.setZoom(navZoom)
         if (here != null) {
@@ -1186,6 +1257,8 @@ class MapActivity : Activity() {
 
     private fun stopNavigation() {
         voice.stop()
+        camInit = false
+        headingKnown = false
         val tripName = trip?.name
         val finished = ride
         ride = null
@@ -1265,8 +1338,9 @@ class MapActivity : Activity() {
 
     private fun nudgeZoom(delta: Double) {
         zoomOffset = (zoomOffset + delta).coerceIn(-2.5, 2.0)
-        navZoom = (navZoom + delta).coerceIn(10.0, 20.0)
-        map.controller.setZoom(navZoom)
+        dispZoom = (dispZoom + delta).coerceIn(10.0, 20.0)
+        targetZoom = (targetZoom + delta).coerceIn(10.0, 20.0)
+        map.controller.setZoom(dispZoom)
     }
 
     private fun relativeBearing(here: GeoPoint, goal: GeoPoint): Float {
