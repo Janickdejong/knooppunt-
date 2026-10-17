@@ -220,6 +220,7 @@ class MapActivity : Activity() {
         }
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
+        overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
         map.overlays.add(RotationGestureOverlay(map).apply { isEnabled = true })
         map.overlays.add(overlay)
@@ -1086,6 +1087,16 @@ class MapActivity : Activity() {
 
     // ---------------------------------------------------------------- route
 
+    /** Lang indrukken: haal een knooppunt uit je route, de route loopt dan rechtstreeks naar het volgende. */
+    private fun onNodeLongPressed(node: KNode) {
+        val i = routeIds.lastIndexOf(node.id)
+        if (i < 0) return
+        map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        routeIds.removeAt(i)
+        Toast.makeText(this, "Knooppunt ${node.ref} overgeslagen", Toast.LENGTH_SHORT).show()
+        rebuildRoute()
+    }
+
     private fun onNodeTapped(node: KNode) {
         map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         if (routeIds.isNotEmpty() && routeIds.last() == node.id) {
@@ -1148,6 +1159,7 @@ class MapActivity : Activity() {
         val meters = totalLength()
         val minutes = (meters / 1000.0 / 16.0 * 60.0).roundToInt()
         var sub = "${formatKm(meters)} · ${routeNodes.size} knooppunten · ± $minutes min"
+        if (routeNodes.size >= 3) sub += "\nHoud een nummer lang ingedrukt om het over te slaan"
         if (legs.any { !it.connected }) sub += "\nLet op: stippellijn = geen verbinding gevonden"
         subView.text = sub
     }

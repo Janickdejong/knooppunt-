@@ -25,6 +25,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var guide: List<GeoPoint> = emptyList()
     var onNodeTap: ((KNode) -> Unit)? = null
     var onUserMove: (() -> Unit)? = null
+    var onNodeLong: ((KNode) -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
     private val path = Path()
@@ -209,9 +210,9 @@ class NetOverlay(private val dens: Float) : Overlay() {
         return false
     }
 
-    override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
-        val n = net ?: return false
-        if (navigating || mapView.zoomLevelDouble < SHOW_FROM) return false
+    private fun nodeAt(e: MotionEvent, mapView: MapView): KNode? {
+        val n = net ?: return null
+        if (navigating || mapView.zoomLevelDouble < 11.0) return null
         val pj = mapView.projection
         val limit = 30f * dens
         var best: KNode? = null
@@ -226,13 +227,18 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 best = node
             }
         }
-        val hit = best ?: return false
+        return best
+    }
+
+    override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
+        val hit = nodeAt(e, mapView) ?: return false
         onNodeTap?.invoke(hit)
         return true
     }
 
-    companion object {
-        /** Vanaf dit zoomniveau tonen we alle knooppunten en verbindingen. */
-        const val SHOW_FROM = 12.5
+    override fun onLongPress(e: MotionEvent, mapView: MapView): Boolean {
+        val hit = nodeAt(e, mapView) ?: return false
+        onNodeLong?.invoke(hit)
+        return true
     }
 }

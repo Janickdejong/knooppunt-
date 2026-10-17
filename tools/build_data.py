@@ -218,6 +218,38 @@ def main(src, dst):
     for nid, (ref, _, _) in c.nodes.items():
         by_ref.setdefault(norm(ref), []).append(nid)
 
+    # Hetzelfde nummer vlak bij elkaar (bijv. een bordje aan beide kanten van een kruising) is
+    # één knooppunt: voeg ze samen, zodat routes er doorheen kunnen lopen.
+    rep = {}
+    cent = {}
+    for ids in by_ref.values():
+        parent = {i: i for i in ids}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i, x in enumerate(ids):
+            px = (c.nodes[x][1], c.nodes[x][2])
+            for y in ids[i + 1:]:
+                py = (c.nodes[y][1], c.nodes[y][2])
+                if abs(px[0] - py[0]) > 0.002 or abs(px[1] - py[1]) > 0.004:
+                    continue
+                if dist(px, py) <= 80.0:
+                    parent[find(x)] = find(y)
+        groups = {}
+        for i in ids:
+            groups.setdefault(find(i), []).append(i)
+        for root, members in groups.items():
+            r = min(members)
+            lat = sum(c.nodes[m][1] for m in members) / len(members)
+            lon = sum(c.nodes[m][2] for m in members) / len(members)
+            cent[r] = (lat, lon)
+            for m in members:
+                rep[m] = r
+
     edges = []
     skipped = 0
     for rid, ref, name, note, way_ids in c.rels:
@@ -233,7 +265,7 @@ def main(src, dst):
             continue
         a, na = nearest(by_ref.get(ra, []), und, c.loc, c.nodes)
         b, nb = nearest(by_ref.get(rb, []), und, c.loc, c.nodes)
-        if a is None or b is None or a == b or na == nb:
+        if a is None or b is None or rep[a] == rep[b] or na == nb:
             continue
         # Fietsers mogen op eenrichtingspaden maar één kant op: heen en terug kunnen dus een andere weg zijn.
         adj = way_graph(way_ids, c.ways, c.loc, c.oneway)
@@ -257,7 +289,7 @@ def main(src, dst):
         pb = (c.nodes[b][1], c.nodes[b][2])
         pts = simplify([pa] + [c.loc[n] for n in fwd] + [pb])
         back = simplify([pb] + [c.loc[n] for n in bwd] + [pa]) if bwd is not None else None
-        edges.append((a, b, pts, back))
+        edges.append((rep[a], rep[b], pts, back))
 
     print(f"{skipped} verbindingen overgeslagen (geen doorlopende weg)")
     used = sorted({e[0] for e in edges} | {e[1] for e in edges})
@@ -266,7 +298,7 @@ def main(src, dst):
     index = {nid: i for i, nid in enumerate(used)}
     data = {
         "date": date.today().isoformat(),
-        "nodes": [[nid, c.nodes[nid][0], round(c.nodes[nid][1], 6), round(c.nodes[nid][2], 6)] for nid in used],
+        "nodes": [[nid, c.nodes[nid][0], round(cent[nid][0], 6), round(cent[nid][1], 6)] for nid in used],
         "edges": [
             [index[a], index[b], encode(pts)] + ([encode(back)] if back else [])
             for a, b, pts, back in edges
