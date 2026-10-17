@@ -393,37 +393,31 @@ object Overpass {
         return Math.hypot(ax + t * dx, ay + t * dy)
     }
 
-    /** Cafés, restaurants en toiletten direct langs de route (150 m). Lange routes gaan in stukken van ongeveer 4 km. */
+    /** Voert het werk voor elk stuk route tegelijk uit (drie tegelijk) en voegt de uitkomsten samen. null = alles mislukt. */
+    private fun <T> parallel(chunks: List<List<GeoPoint>>, work: (List<GeoPoint>) -> List<T>?): List<T>? {
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(3)
+        try {
+            val futures = chunks.map { c -> pool.submit<List<T>?> { try { work(c) } catch (_: Exception) { null } } }
+            val all = ArrayList<T>()
+            var ok = 0
+            for (f in futures) {
+                val r = f.get()
+                if (r != null) { ok++; all.addAll(r) }
+            }
+            return if (ok == 0) null else all
+        } finally {
+            pool.shutdown()
+        }
+    }
+
+    /** Cafés, restaurants en toiletten direct langs de route (150 m). */
     fun pois(line: List<GeoPoint>): List<Poi>? {
         if (line.size < 2) return null
-        val chunks = ArrayList<List<GeoPoint>>()
-        var cur = ArrayList<GeoPoint>()
-        var acc = 0.0
-        for (i in line.indices) {
-            if (i > 0) acc += line[i - 1].distanceToAsDouble(line[i])
-            cur.add(line[i])
-            if (acc >= 4000.0) {
-                chunks.add(cur)
-                cur = arrayListOf(line[i])
-                acc = 0.0
-            }
-        }
-        if (cur.size >= 2) chunks.add(cur)
-        val seen = HashSet<String>()
-        val out = ArrayList<Poi>()
-        var failed = 0
-        for (chunk in chunks) {
-            val pad = 0.0025
-            val south = chunk.minOf { it.latitude } - pad
-            val north = chunk.maxOf { it.latitude } + pad
-            val west = chunk.minOf { it.longitude } - pad * 1.6
-            val east = chunk.maxOf { it.longitude } + pad * 1.6
-            val box = String.format(java.util.Locale.US, "%.5f,%.5f,%.5f,%.5f", south, west, north, east)
-            val query = "[out:json][timeout:25];" +
-                "nwr[\"amenity\"~\"^(cafe|restaurant|toilets|fast_food|pub|ice_cream)\$\"]($box);" +
-                "out center 800;"
-            val text = post(query)
-            if (text == null) { failed++; continue }
+        val seen = java.util.Collections.synchronizedSet(HashSet<String>())
+        return parallel(splitChunks(line, 6000.0)) { chunk ->
+            val box = boxOf(chunk, 0.0025)
+            val text = post("[out:json][timeout:25];nwr[\"amenity\"~\"^(cafe|restaurant|toilets|fast_food|pub|ice_cream)$\"]($box);out center 800;") ?: return@parallel null
+            val out = ArrayList<Poi>()
             val arr = JSONObject(text).getJSONArray("elements")
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -436,29 +430,24 @@ object Overpass {
                 val pos = GeoPoint(lat, lon)
                 var near = Double.MAX_VALUE
                 for (j in 1 until chunk.size) {
-                    val d = segDist(pos, chunk[j - 1], chunk[j])
-                    if (d < near) near = d
+                    near = minOf(near, segDist(pos, chunk[j - 1], chunk[j]))
                     if (near < 150.0) break
                 }
-                if (near > 150.0) continue
-                if (seen.add(o.getString("type") + o.getLong("id"))) out.add(Poi(name.ifEmpty { "Toilet" }, kind, pos))
+                if (near > 150.0 || !seen.add(o.getString("type") + o.getLong("id"))) continue
+                out.add(Poi(name.ifEmpty { "Toilet" }, kind, pos))
             }
+            out
         }
-        return if (failed == chunks.size) null else out
     }
 
     /** Plaatsen (stad, dorp, gehucht) tot ongeveer 1,5 km van de route. */
     fun towns(line: List<GeoPoint>): List<Town>? {
         if (line.size < 2) return null
-        val out = ArrayList<Town>()
-        val seen = HashSet<Long>()
-        var failed = 0
-        val chunks = splitChunks(line, 10000.0)
-        for (chunk in chunks) {
-            val pad = 0.02
-            val box = boxOf(chunk, pad)
-            val text = post("[out:json][timeout:25];node[\"place\"~\"^(city|town|village|hamlet)$\"][\"name\"]($box);out;")
-            if (text == null) { failed++; continue }
+        val seen = java.util.Collections.synchronizedSet(HashSet<Long>())
+        return parallel(splitChunks(line, 12000.0)) { chunk ->
+            val box = boxOf(chunk, 0.02)
+            val text = post("[out:json][timeout:25];node[\"place\"~\"^(city|town|village|hamlet)$\"][\"name\"]($box);out;") ?: return@parallel null
+            val out = ArrayList<Town>()
             val arr = JSONObject(text).getJSONArray("elements")
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -472,25 +461,22 @@ object Overpass {
                 if (near > 1500.0 || !seen.add(o.getLong("id"))) continue
                 out.add(Town(t.getString("name"), t.optString("place"), pos, t.optString("population").filter { it.isDigit() }.toIntOrNull() ?: 0, t.optString("wikipedia").ifEmpty { null }))
             }
+            out
         }
-        return if (failed == chunks.size) null else out
     }
 
     /** Bezienswaardigheden direct langs de route (200 m). */
     fun sights(line: List<GeoPoint>): List<Poi>? {
         if (line.size < 2) return null
-        val out = ArrayList<Poi>()
-        val seen = HashSet<String>()
-        var failed = 0
-        val chunks = splitChunks(line, 4000.0)
-        for (chunk in chunks) {
+        val seen = java.util.Collections.synchronizedSet(HashSet<String>())
+        return parallel(splitChunks(line, 6000.0)) { chunk ->
             val box = boxOf(chunk, 0.003)
             val q = "[out:json][timeout:25];(" +
                 "nwr[\"tourism\"~\"^(attraction|museum|viewpoint|artwork)$\"][\"name\"]($box);" +
                 "nwr[\"historic\"~\"^(castle|monument|windmill|ruins|fort|city_gate|manor|memorial|archaeological_site)$\"][\"name\"]($box);" +
                 "nwr[\"man_made\"~\"^(windmill|watermill|tower|lighthouse)$\"][\"name\"]($box););out center 400;"
-            val text = post(q)
-            if (text == null) { failed++; continue }
+            val text = post(q) ?: return@parallel null
+            val out = ArrayList<Poi>()
             val arr = JSONObject(text).getJSONArray("elements")
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -506,8 +492,8 @@ object Overpass {
                 if (near > 200.0 || !seen.add(o.getString("type") + o.getLong("id"))) continue
                 out.add(Poi(t.getString("name"), "sight", pos))
             }
+            out
         }
-        return if (failed == chunks.size) null else out
     }
 
     private fun splitChunks(line: List<GeoPoint>, meters: Double): List<List<GeoPoint>> {
@@ -565,8 +551,8 @@ object Overpass {
                 val c = URL(server).openConnection() as HttpURLConnection
                 c.requestMethod = "POST"
                 c.doOutput = true
-                c.connectTimeout = 8000
-                c.readTimeout = 30000
+                c.connectTimeout = 5000
+                c.readTimeout = 20000
                 c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
                 c.outputStream.use { it.write(body) }
                 if (c.responseCode != 200) { lastError = "melding ${c.responseCode}"; continue }

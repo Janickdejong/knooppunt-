@@ -2338,8 +2338,13 @@ class MapActivity : Activity() {
         }
         setStatus("Route verkennen\u2026")
         io.execute {
+            // Plaatsen en bezienswaardigheden tegelijk ophalen.
+            var sightsRes: List<Poi>? = null
+            val sightThread = Thread { sightsRes = try { Overpass.sights(line) } catch (e: Exception) { null } }
+            sightThread.start()
             val towns = try { Overpass.towns(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
-            val sights = try { Overpass.sights(line) } catch (e: Exception) { null }
+            sightThread.join()
+            val sights = sightsRes
             val cum = DoubleArray(line.size)
             for (i in 1 until line.size) cum[i] = cum[i - 1] + line[i - 1].distanceToAsDouble(line[i])
             fun at(pos: GeoPoint): Double {
