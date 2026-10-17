@@ -151,6 +151,8 @@ class MapActivity : Activity() {
     // Vloeiende camera: de GPS geeft maar één keer per seconde een plek, daartussen schuift de kaart zelf mee.
     private var lastSpeed = 0f
     private var idleWait = false
+    private lateinit var skipBtn: TextView
+    private var skipBackup: List<Long>? = null
     private var camInit = false
     private var headingKnown = false
     private var dispLat = 0.0
@@ -399,6 +401,17 @@ class MapActivity : Activity() {
             setPadding(dp(24), dp(10), dp(24), dp(10))
             setOnClickListener { stopNavigation() }
         }
+        skipBtn = TextView(this).apply {
+            text = "Sla over"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = rounded(Color.parseColor("#34465C"), 16)
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setOnClickListener { skipNext() }
+        }
+        navBar.addView(skipBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
         navBar.addView(stop)
         root.addView(navBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.BOTTOM
@@ -1293,6 +1306,8 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        skipBtn.visibility = if (trip == null) View.VISIBLE else View.GONE
+        skipBackup = null
         computePassNodes()
         guideFailed = false
         spoken.clear()
@@ -1353,7 +1368,39 @@ class MapActivity : Activity() {
             trip = null
             rebuildRoute()
         }
+        skipBackup?.let {
+            routeIds.clear()
+            routeIds.addAll(it)
+            skipBackup = null
+            rebuildRoute()
+        }
         if (finished != null) finishRide(finished, tripName?.let { "Naar $it" })
+    }
+
+    /** Het volgende knooppunt overslaan: de route loopt verder vanaf waar je nu bent. */
+    private fun skipNext() {
+        val net = overlay.net ?: return
+        val k = navNext
+        if (trip != null || k < 1 || k >= routeNodes.size - 1) {
+            Toast.makeText(this, "Dit knooppunt kun je niet overslaan", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val here = me ?: return
+        val skipped = routeNodes[k]
+        val start = net.nodes.values.filter { it.id != skipped.id }.minByOrNull { it.pos.distanceToAsDouble(here) } ?: return
+        if (skipBackup == null) skipBackup = ArrayList(routeIds)
+        val rest = routeNodes.drop(k + 1).map { it.id }
+        val ids = if (rest.firstOrNull() == start.id) rest else listOf(start.id) + rest
+        routeIds.clear()
+        routeIds.addAll(ids)
+        rebuildRoute()
+        computePassNodes()
+        spoken.clear()
+        spoken.add("start")
+        wasOffRoute = false
+        say("Knooppunt ${skipped.ref} overgeslagen")
+        updateNavigation(here)
+        followMe(here)
     }
 
     private fun renderNav(mode: Int, angle: Float, big: String, line: String, nodeRef: String, nodeText: String, off: Boolean) {
@@ -1963,11 +2010,51 @@ class MapActivity : Activity() {
     private fun openMore() {
         sheet("Meer", content = { d ->
             column(
+                listRow("Rondje van X km", "Een lus vanaf waar je nu bent", glyph("\u21BB")) { d.dismiss(); askLoop() },
                 listRow("Route als GPX bewaren", "Voor een fietscomputer of andere app", glyph("\u2193")) { d.dismiss(); exportGpx() },
                 listRow("Route offline opslaan", "Kaart langs je route zonder bereik", glyph("\u2B07")) { d.dismiss(); downloadOffline() },
                 listRow("Mijn ritten", "Wat je gefietst hebt", glyph("\u2630")) { d.dismiss(); openRides() }
             )
         }, actions = listOf(SheetAction("Sluiten", false) {}))
+    }
+
+    private fun askLoop() {
+        val net = overlay.net
+        if (net == null) {
+            Toast.makeText(this, "Het netwerk is nog niet geladen", Toast.LENGTH_SHORT).show()
+            return
+        }
+        sheet("Rondje van hoeveel km?", "Vanaf je locatie, of anders het midden van de kaart", content = { d ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (km in listOf(15, 25, 35, 50, 70)) {
+                row.addView(sheetButton("$km", false) { d.dismiss(); makeLoop(km * 1000.0) },
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) })
+            }
+            row
+        }, actions = listOf(SheetAction("Sluiten", false) {}))
+    }
+
+    private fun makeLoop(target: Double) {
+        val net = overlay.net ?: return
+        val from: GeoPoint = me ?: GeoPoint(map.mapCenter.latitude, map.mapCenter.longitude)
+        val start = net.nodes.values.minByOrNull { it.pos.distanceToAsDouble(from) }
+        if (start == null) return
+        Toast.makeText(this, "Rondje zoeken\u2026", Toast.LENGTH_SHORT).show()
+        Thread {
+            val chain = net.loop(start, target)
+            runOnUiThread {
+                if (chain == null || chain.size < 3) {
+                    Toast.makeText(this, "Geen rondje gevonden hier", Toast.LENGTH_LONG).show()
+                } else {
+                    routeIds.clear()
+                    chain.forEach { routeIds.add(it.id) }
+                    rebuildRoute()
+                    val b = BoundingBox.fromGeoPoints(chain.map { it.pos })
+                    map.zoomToBoundingBox(b.increaseByScale(1.3f), true)
+                    Toast.makeText(this, "Rondje van " + formatKm(totalLength()) + ". Opnieuw kiezen geeft een ander rondje.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
     private fun openRides() {

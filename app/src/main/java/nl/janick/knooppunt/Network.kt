@@ -86,6 +86,82 @@ class Network(val nodes: Map<Long, KNode>, val edges: List<KEdge>) {
         }
         return Leg(pts, length, true)
     }
+
+    /** Kortste weg als lijst knooppunten; wegen in `avoid` kosten extra zodat een rondje niet heen en terug gaat. */
+    private fun path(from: KNode, to: KNode, avoid: Set<KEdge>): Pair<List<KNode>, List<KEdge>>? {
+        val dist = HashMap<Long, Double>()
+        val prev = HashMap<Long, Pair<Long, KEdge>>()
+        val queue = PriorityQueue<Pair<Double, Long>>(compareBy<Pair<Double, Long>> { it.first })
+        dist[from.id] = 0.0
+        queue.add(0.0 to from.id)
+        while (queue.isNotEmpty()) {
+            val (d, id) = queue.poll()!!
+            if (d > (dist[id] ?: Double.MAX_VALUE)) continue
+            if (id == to.id) break
+            for (e in adj[id] ?: continue) {
+                val other = if (e.a.id == id) e.b else e.a
+                val nd = d + e.length * (if (e in avoid) 6.0 else 1.0)
+                if (nd < (dist[other.id] ?: Double.MAX_VALUE)) {
+                    dist[other.id] = nd
+                    prev[other.id] = id to e
+                    queue.add(nd to other.id)
+                }
+            }
+        }
+        if (!dist.containsKey(to.id) || from.id == to.id) return null
+        val ns = ArrayList<KNode>()
+        val es = ArrayList<KEdge>()
+        var cur = to.id
+        while (cur != from.id) {
+            val (pr, e) = prev[cur]!!
+            ns.add(nodes[cur]!!)
+            es.add(e)
+            cur = pr
+        }
+        ns.reverse()
+        es.reverse()
+        return ns to es
+    }
+
+    /** Maakt een rondje van ongeveer `target` meter vanaf `start` over de knooppunten (begin en eind = start). */
+    fun loop(start: KNode, target: Double, seed: Long = System.nanoTime()): List<KNode>? {
+        val rnd = java.util.Random(seed)
+        val pool = nodes.values.filter { it.id != start.id }
+        var best: List<KNode>? = null
+        var bestScore = Double.MAX_VALUE
+        for (attempt in 0 until 60) {
+            val r = target / 3.6 * (0.8 + rnd.nextDouble() * 0.4)
+            val bearing = rnd.nextDouble() * 360.0
+            val spread = 50.0 + rnd.nextDouble() * 30.0
+            val pa = start.pos.destinationPoint(r, bearing)
+            val pb = start.pos.destinationPoint(r, bearing + (if (rnd.nextBoolean()) spread else -spread))
+            val a = pool.minByOrNull { it.pos.distanceToAsDouble(pa) } ?: continue
+            val b = pool.minByOrNull { it.pos.distanceToAsDouble(pb) } ?: continue
+            if (a.id == b.id) continue
+            val used = HashSet<KEdge>()
+            val chain = arrayListOf(start)
+            var total = 0.0
+            var overlap = 0.0
+            var ok = true
+            for ((x, y) in listOf(start to a, a to b, b to start)) {
+                val pr = path(x, y, used)
+                if (pr == null) { ok = false; break }
+                for (e in pr.second) {
+                    if (e in used) overlap += e.length
+                    used.add(e)
+                    total += e.length
+                }
+                chain.addAll(pr.first)
+            }
+            if (!ok || total < 1.0) continue
+            val score = Math.abs(total - target) / target + 1.5 * overlap / total
+            if (score < bestScore) {
+                bestScore = score
+                best = chain
+            }
+        }
+        return best
+    }
 }
 
 /** Bouwt het netwerk stap voor stap op: nieuwe vakjes komen erbij zonder dat alles opnieuw wordt berekend. */
