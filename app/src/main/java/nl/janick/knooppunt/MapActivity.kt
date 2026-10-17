@@ -129,6 +129,8 @@ class MapActivity : Activity() {
     private lateinit var thenIcon: TurnArrowView
     private lateinit var thenText: TextView
     private lateinit var muteButton: TextView
+    private lateinit var searchButton: TextView
+    private var trip: Place? = null
     private lateinit var zoomInButton: TextView
     private lateinit var zoomOutButton: TextView
     private lateinit var voice: Voice
@@ -463,6 +465,7 @@ class MapActivity : Activity() {
             prefs.edit().putInt("style", styleMode).apply()
             applyStyle()
         }
+        searchButton = roundButton("\uD83D\uDD0D", 18f) { openSearch() }
         voice = Voice(this)
         voice.muted = prefs.getBoolean("muted", false)
         muteButton = roundButton(if (voice.muted) "\uD83D\uDD07" else "\uD83D\uDD0A", 18f) { toggleMute() }
@@ -472,7 +475,7 @@ class MapActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        for (b in listOf(styleButton, muteButton, zoomInButton, zoomOutButton)) {
+        for (b in listOf(searchButton, styleButton, muteButton, zoomInButton, zoomOutButton)) {
             side.addView(b, LinearLayout.LayoutParams(dp(46), dp(46)).apply { topMargin = dp(10) })
         }
         root.addView(side, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -894,6 +897,7 @@ class MapActivity : Activity() {
         speedView.visibility = if (navigating) View.VISIBLE else View.GONE
         val navOnly = if (navigating) View.VISIBLE else View.GONE
         muteButton.visibility = navOnly
+        searchButton.visibility = if (navigating) View.GONE else View.VISIBLE
         zoomInButton.visibility = navOnly
         zoomOutButton.visibility = navOnly
         findTopCard().visibility = if (navigating) View.GONE else View.VISIBLE
@@ -983,6 +987,7 @@ class MapActivity : Activity() {
 
     private fun stopNavigation() {
         voice.stop()
+        val tripName = trip?.name
         val finished = ride
         ride = null
         navigating = false
@@ -994,7 +999,11 @@ class MapActivity : Activity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
         map.invalidate()
-        if (finished != null) finishRide(finished)
+        if (trip != null) {
+            trip = null
+            rebuildRoute()
+        }
+        if (finished != null) finishRide(finished, tripName?.let { "Naar $it" })
     }
 
     private fun renderNav(mode: Int, angle: Float, big: String, line: String, nodeRef: String, nodeText: String, off: Boolean) {
@@ -1117,7 +1126,10 @@ class MapActivity : Activity() {
             if (navNext != -1) {
                 map.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 val reached = routeNodes[navNext].ref
-                if (k < routeNodes.size) say("Knooppunt $reached. Volgende knooppunt ${routeNodes[k].ref}") else say("Je bent aangekomen bij knooppunt $reached")
+                val tr = trip
+                if (tr != null) {
+                    if (k >= routeNodes.size) say("Je bent aangekomen bij ${tr.name}")
+                } else if (k < routeNodes.size) say("Knooppunt $reached. Volgende knooppunt ${routeNodes[k].ref}") else say("Je bent aangekomen bij knooppunt $reached")
             }
             navNext = k
         }
@@ -1127,12 +1139,12 @@ class MapActivity : Activity() {
             say("Je bent van de route af")
         }
         if (!off && wasOffRoute && navProgress > 0) say("Je bent weer op de route")
-        if (toStart && spoken.add("start")) say("Ga eerst naar het startpunt, knooppunt ${routeNodes[0].ref}")
+        if (toStart && trip == null && spoken.add("start")) say("Ga eerst naar het startpunt, knooppunt ${routeNodes[0].ref}")
         wasOffRoute = off
 
         if (k >= routeNodes.size) {
             overlay.nextId = -1L
-            renderNav(TurnArrowView.ARRIVED, 0f, "Aangekomen", "Je bent bij ${routeNodes.last().ref}", routeNodes.last().ref, "", false)
+            renderNav(TurnArrowView.ARRIVED, 0f, "Aangekomen", "Je bent bij ${trip?.name ?: routeNodes.last().ref}", routeNodes.last().ref, "", false)
             etaMain.text = "Klaar"
             etaSub.text = formatKm(totalLength())
             return
@@ -1171,8 +1183,9 @@ class MapActivity : Activity() {
             overlay.nextId = next.id
             mainTrack?.progress = navProgress
             val m = guidance(mainTrack, "m", toNext, "Rechtdoor")
-            val nodeText = "${formatDistance(toNext)} naar knooppunt ${next.ref}" +
-                (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
+            val nodeText = if (trip != null) "${formatDistance(toNext)} naar ${trip?.name}" else
+                "${formatDistance(toNext)} naar knooppunt ${next.ref}" +
+                    (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
             renderNav(m.first, 0f, m.second, m.third, next.ref, nodeText, false)
         }
         updateEta(remainingAll)
@@ -1383,6 +1396,176 @@ class MapActivity : Activity() {
         scheduleLoad()
     }
 
+    // ---------------------------------------------------------------- adressen en plekken
+
+    private fun savedPlaces(): ArrayList<Place> {
+        val out = ArrayList<Place>()
+        try {
+            val arr = JSONArray(prefs.getString("places", "[]"))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                out.add(Place(o.optString("name"), o.optString("address"), o.optDouble("lat"), o.optDouble("lon")))
+            }
+        } catch (_: Exception) {
+        }
+        return out
+    }
+
+    private fun writePlaces(list: List<Place>) {
+        val arr = JSONArray()
+        for (p in list) {
+            arr.put(JSONObject().put("name", p.name).put("address", p.address).put("lat", p.lat).put("lon", p.lon))
+        }
+        prefs.edit().putString("places", arr.toString()).apply()
+    }
+
+    private fun isSaved(p: Place) = savedPlaces().any { Math.abs(it.lat - p.lat) < 1e-5 && Math.abs(it.lon - p.lon) < 1e-5 }
+
+    private fun openSearch() {
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+        }
+        val input = EditText(this).apply {
+            hint = "Adres of plaats, bijv. Kerkstraat 5 Doesburg"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+        }
+        column.addView(input)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Naar adres fietsen")
+            .setView(ScrollView(this).apply { addView(column) })
+            .setPositiveButton("Zoeken", null)
+            .setNegativeButton("Sluiten", null)
+            .create()
+        val places = savedPlaces()
+        if (places.isNotEmpty()) {
+            column.addView(TextView(this).apply {
+                text = "Mijn plekken"
+                textSize = 13f
+                setTextColor(muted)
+                setPadding(0, dp(16), 0, dp(4))
+            })
+            for (pl in places) {
+                column.addView(TextView(this).apply {
+                    text = pl.name + "\n" + pl.address.split(",").take(3).joinToString(",")
+                    textSize = 15f
+                    setTextColor(ink)
+                    setPadding(0, dp(10), 0, dp(10))
+                    setOnClickListener {
+                        dialog.dismiss()
+                        placeActions(pl)
+                    }
+                })
+            }
+        }
+        dialog.show()
+        val go = {
+            val q = input.text.toString().trim()
+            if (q.isNotEmpty()) {
+                dialog.dismiss()
+                searchAddress(q)
+            }
+        }
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { go() }
+        input.setOnEditorActionListener { _, _, _ ->
+            go()
+            true
+        }
+    }
+
+    private fun searchAddress(q: String) {
+        Toast.makeText(this, "Zoeken\u2026", Toast.LENGTH_SHORT).show()
+        Streets.search(q) { list ->
+            ui.post {
+                if (list.isEmpty()) {
+                    Toast.makeText(this, "Niets gevonden. Probeer straat, huisnummer en plaats.", Toast.LENGTH_LONG).show()
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Kies het adres")
+                        .setItems(list.map { it.address }.toTypedArray()) { _, i -> placeActions(list[i]) }
+                        .setNegativeButton("Sluiten", null)
+                        .show()
+                }
+            }
+        }
+    }
+
+    private fun placeActions(p: Place) {
+        map.controller.setZoom(16.0)
+        map.controller.setCenter(GeoPoint(p.lat, p.lon))
+        val saved = isSaved(p)
+        AlertDialog.Builder(this)
+            .setTitle(p.name)
+            .setMessage(p.address)
+            .setPositiveButton("Fietsen hierheen") { _, _ -> bikeTo(p) }
+            .setNeutralButton(if (saved) "Verwijder plek" else "Bewaar als plek") { _, _ ->
+                if (saved) {
+                    writePlaces(savedPlaces().filter { !(Math.abs(it.lat - p.lat) < 1e-5 && Math.abs(it.lon - p.lon) < 1e-5) })
+                } else {
+                    askPlaceName(p)
+                }
+            }
+            .setNegativeButton("Sluiten", null)
+            .show()
+    }
+
+    private fun askPlaceName(p: Place) {
+        val input = EditText(this).apply {
+            setText(p.name)
+            hint = "Naam, bijv. Oma of Marieke"
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+            selectAll()
+        }
+        val pad = FrameLayout(this).apply {
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Plek bewaren")
+            .setView(pad)
+            .setPositiveButton("Bewaren") { _, _ ->
+                val list = savedPlaces()
+                list.add(Place(input.text.toString().ifBlank { p.name }, p.address, p.lat, p.lon))
+                writePlaces(list)
+                Toast.makeText(this, "Bewaard bij Mijn plekken", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Annuleren", null)
+            .show()
+    }
+
+    /** Fietsroute van je plek naar een adres, met dezelfde navigatie als de knooppuntroutes. */
+    private fun bikeTo(p: Place) {
+        val here = me
+        if (here == null) {
+            Toast.makeText(this, "Je locatie is nog niet gevonden", Toast.LENGTH_SHORT).show()
+            startLocation()
+            return
+        }
+        setStatus("Fietsroute zoeken\u2026")
+        io.execute {
+            val pts = Router.route(here, GeoPoint(p.lat, p.lon))
+            ui.post {
+                setStatus("")
+                if (pts == null || pts.size < 2) {
+                    Toast.makeText(this, "Er is nu geen route gevonden. Heb je internet?", Toast.LENGTH_LONG).show()
+                } else {
+                    var len = 0.0
+                    for (i in 1 until pts.size) len += pts[i - 1].distanceToAsDouble(pts[i])
+                    trip = p
+                    routeNodes = listOf(KNode(-1L, "A", pts.first()), KNode(-2L, "\u2691", pts.last()))
+                    legs = listOf(Leg(pts, len, true))
+                    overlay.routeIds = emptySet()
+                    overlay.legs = legs
+                    buildNavigationLine()
+                    startNavigation()
+                }
+            }
+        }
+    }
+
     private fun formatDuration(ms: Long): String {
         val minutes = (ms / 60000.0).roundToInt()
         return if (minutes >= 60) "${minutes / 60} u ${minutes % 60} min" else "$minutes min"
@@ -1390,11 +1573,11 @@ class MapActivity : Activity() {
 
     private fun kmh(ms: Double): String = String.format(Locale("nl", "NL"), "%.1f", ms * 3.6)
 
-    private fun finishRide(r: RideRecorder) {
+    private fun finishRide(r: RideRecorder, tripTitle: String?) {
         if (r.distance < 300.0) return
         val msg = formatKm(r.distance) + " in " + formatDuration(r.movingMs) +
             "\nGemiddeld " + kmh(r.avgSpeed()) + " km/u \u00B7 max " + kmh(r.maxSpeed) + " km/u"
-        val name = routeName()
+        val name = tripTitle ?: routeName()
         AlertDialog.Builder(this)
             .setTitle("Rit klaar")
             .setMessage(msg)

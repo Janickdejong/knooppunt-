@@ -4,9 +4,13 @@ import org.json.JSONObject
 import org.osmdroid.util.GeoPoint
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
+import org.json.JSONArray
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+
+class Place(val name: String, val address: String, val lat: Double, val lon: Double)
 
 /** Straatnamen bij bochten, opgezocht via OpenStreetMap (Nominatim, maximaal 1 aanvraag per seconde). */
 object Streets {
@@ -58,6 +62,37 @@ object Streets {
                 }
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /** Zoekt een adres of plaats (Nominatim). De uitkomst komt op een achtergrondthread terug. */
+    fun search(query: String, cb: (List<Place>) -> Unit) {
+        exec.execute {
+            val out = ArrayList<Place>()
+            try {
+                val wait = 1100L - (System.currentTimeMillis() - lastCall)
+                if (wait > 0) Thread.sleep(wait)
+                lastCall = System.currentTimeMillis()
+                val url = URL(
+                    "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=nl&countrycodes=nl,be,de&q=" +
+                        URLEncoder.encode(query, "UTF-8")
+                )
+                val c = url.openConnection() as HttpURLConnection
+                c.connectTimeout = 10000
+                c.readTimeout = 10000
+                c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
+                if (c.responseCode == 200) {
+                    val arr = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
+                    for (i in 0 until arr.length()) {
+                        val o = arr.getJSONObject(i)
+                        val full = o.optString("display_name")
+                        val short = full.split(",").take(2).joinToString(",").trim()
+                        out.add(Place(short, full, o.optDouble("lat"), o.optDouble("lon")))
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            cb(out)
         }
     }
 }
