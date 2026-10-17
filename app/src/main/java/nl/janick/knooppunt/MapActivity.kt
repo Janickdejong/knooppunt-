@@ -87,9 +87,6 @@ class MapActivity : Activity() {
     private var shownNight: Boolean? = null
     private lateinit var styleButton: TextView
 
-
-        "\u00A9 OpenStreetMap-bijdragers \u00A9 CARTO"
-    )
     private var bundled = false
 
     // Route.
