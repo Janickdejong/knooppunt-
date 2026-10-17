@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -152,6 +154,7 @@ class MapActivity : Activity() {
     private var guideTarget: GeoPoint? = null
     private var guideFetching = false
     private var guideAttempt = 0L
+    private var guideFailed = false
 
     private var locationManager: LocationManager? = null
     private val locationListener = object : LocationListener {
@@ -1142,6 +1145,7 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        guideFailed = false
         spoken.clear()
         zoomOffset = 0.0
         ride = RideRecorder()
@@ -1347,12 +1351,16 @@ class MapActivity : Activity() {
         var remainingAll = remaining
 
         if (toStart || off) {
-            val goal = if (toStart) navPts[0] else navPts[best]
-            val goalNode = if (toStart) routeNodes[0] else next
-            ensureGuide(here, goal)
+            val fetchGoal = if (toStart) navPts[0] else navPts[best]
+            // Zonder internet is er geen weg naar het startpunt te berekenen: wijs dan naar het
+            // dichtstbijzijnde punt van de route, waar je gewoon kunt aansluiten.
+            val joinNearest = toStart && guideFailed && guide == null
+            val goal = if (joinNearest) navPts[best] else fetchGoal
+            val goalNode = if (toStart && !joinNearest) routeNodes[0] else if (joinNearest) routeNodes[min(max(k - 1, 0), routeNodes.size - 1)] else next
+            ensureGuide(here, fetchGoal)
             val g = guide
             overlay.nextId = goalNode.id
-            val what = if (toStart) "Startpunt" else "Terug naar de route"
+            val what = if (joinNearest) "Dichtstbijzijnde punt van de route" else if (toStart) "Startpunt" else "Terug naar de route"
             if (g != null) {
                 val left = g.remaining() + g.locate(here)
                 val m = guidance(g, "g", left, if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
@@ -1361,7 +1369,7 @@ class MapActivity : Activity() {
             } else {
                 thenBar.visibility = View.GONE
                 val straight = here.distanceToAsDouble(goal)
-                val line = if (guideFetching) "Route zoeken\u2026" else "Ga in deze richting"
+                val line = if (joinNearest) "Geen internet: volg de pijl naar de route" else if (guideFetching) "Route zoeken\u2026" else "Ga in deze richting"
                 renderNav(TurnArrowView.POINTER, relativeBearing(here, goal), formatDistance(straight), line, goalNode.ref, "$what \u00B7 ${formatDistance(straight)}", !toStart)
                 remainingAll = (if (toStart) navCum[navCum.size - 1] else remaining) + straight
                 navFitted = true
@@ -1381,6 +1389,16 @@ class MapActivity : Activity() {
         updateEta(remainingAll)
     }
 
+    private fun isOnline(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
     private fun clearGuide() {
         guide = null
         guideTarget = null
@@ -1394,6 +1412,10 @@ class MapActivity : Activity() {
         val stale = g == null ||
             (guideTarget?.distanceToAsDouble(goal) ?: 1e9) > 150.0 ||
             g.locate(here) > 60.0
+        if (!isOnline()) {
+            if (g == null) guideFailed = true
+            return
+        }
         if (!stale || guideFetching || now - guideAttempt < 15000) return
         guideFetching = true
         guideAttempt = now
@@ -1401,7 +1423,9 @@ class MapActivity : Activity() {
             val pts = Router.route(here, goal)
             ui.post {
                 guideFetching = false
+                if (pts == null) guideFailed = true
                 if (pts != null && navigating) {
+                    guideFailed = false
                     guide = Track(pts)
                     guideTarget = goal
                     overlay.guide = pts
