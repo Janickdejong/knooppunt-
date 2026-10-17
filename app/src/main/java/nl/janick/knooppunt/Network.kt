@@ -371,7 +371,23 @@ object Overpass {
         return null
     }
 
-    /** Cafés, restaurants en toiletten direct langs de route (150 m). Lange routes gaan in stukken van 8 km. */
+    /** Afstand in meters van punt p tot het lijnstuk a-b (vlakke benadering, ruim genoeg voor 150 m). */
+    private fun segDist(p: GeoPoint, a: GeoPoint, b: GeoPoint): Double {
+        val k = Math.cos(Math.toRadians(p.latitude))
+        val mx = 111320.0 * k
+        val my = 110540.0
+        val ax = (a.longitude - p.longitude) * mx
+        val ay = (a.latitude - p.latitude) * my
+        val bx = (b.longitude - p.longitude) * mx
+        val by = (b.latitude - p.latitude) * my
+        val dx = bx - ax
+        val dy = by - ay
+        val l2 = dx * dx + dy * dy
+        val t = if (l2 < 1e-9) 0.0 else (-(ax * dx + ay * dy) / l2).coerceIn(0.0, 1.0)
+        return Math.hypot(ax + t * dx, ay + t * dy)
+    }
+
+    /** Cafés, restaurants en toiletten direct langs de route (150 m). Lange routes gaan in stukken van ongeveer 4 km. */
     fun pois(line: List<GeoPoint>): List<Poi>? {
         if (line.size < 2) return null
         val chunks = ArrayList<List<GeoPoint>>()
@@ -380,7 +396,7 @@ object Overpass {
         for (i in line.indices) {
             if (i > 0) acc += line[i - 1].distanceToAsDouble(line[i])
             cur.add(line[i])
-            if (acc >= 8000.0) {
+            if (acc >= 4000.0) {
                 chunks.add(cur)
                 cur = arrayListOf(line[i])
                 acc = 0.0
@@ -391,12 +407,15 @@ object Overpass {
         val out = ArrayList<Poi>()
         var failed = 0
         for (chunk in chunks) {
-            val step = maxOf(1, chunk.size / 50)
-            val sample = (chunk.indices step step).map { chunk[it] } + chunk.last()
-            val coords = sample.joinToString(",") { String.format(java.util.Locale.US, "%.5f,%.5f", it.latitude, it.longitude) }
+            val pad = 0.0025
+            val south = chunk.minOf { it.latitude } - pad
+            val north = chunk.maxOf { it.latitude } + pad
+            val west = chunk.minOf { it.longitude } - pad * 1.6
+            val east = chunk.maxOf { it.longitude } + pad * 1.6
+            val box = String.format(java.util.Locale.US, "%.5f,%.5f,%.5f,%.5f", south, west, north, east)
             val query = "[out:json][timeout:25];" +
-                "nwr[\"amenity\"~\"^(cafe|restaurant|toilets|fast_food|pub|ice_cream)\$\"](around:150,$coords);" +
-                "out center 300;"
+                "nwr[\"amenity\"~\"^(cafe|restaurant|toilets|fast_food|pub|ice_cream)\$\"]($box);" +
+                "out center 800;"
             val text = post(query)
             if (text == null) { failed++; continue }
             val arr = JSONObject(text).getJSONArray("elements")
@@ -408,7 +427,15 @@ object Overpass {
                 if (kind != "toilets" && name.isEmpty()) continue
                 val lat = if (o.has("lat")) o.getDouble("lat") else o.optJSONObject("center")?.getDouble("lat") ?: continue
                 val lon = if (o.has("lon")) o.getDouble("lon") else o.optJSONObject("center")?.getDouble("lon") ?: continue
-                if (seen.add(o.getString("type") + o.getLong("id"))) out.add(Poi(name.ifEmpty { "Toilet" }, kind, GeoPoint(lat, lon)))
+                val pos = GeoPoint(lat, lon)
+                var near = Double.MAX_VALUE
+                for (j in 1 until chunk.size) {
+                    val d = segDist(pos, chunk[j - 1], chunk[j])
+                    if (d < near) near = d
+                    if (near < 150.0) break
+                }
+                if (near > 150.0) continue
+                if (seen.add(o.getString("type") + o.getLong("id"))) out.add(Poi(name.ifEmpty { "Toilet" }, kind, pos))
             }
         }
         return if (failed == chunks.size) null else out
@@ -426,10 +453,12 @@ object Overpass {
                 c.readTimeout = 30000
                 c.setRequestProperty("User-Agent", "Knooppunt (nl.janick.knooppunt)")
                 c.outputStream.use { it.write(body) }
-                if (c.responseCode != 200) continue
+                if (c.responseCode != 200) { lastError = "melding ${c.responseCode}"; continue }
                 val text = c.inputStream.bufferedReader().use { it.readText() }
                 if (text.contains("\"elements\"")) return text
-            } catch (_: Exception) {
+                lastError = "onvolledig antwoord"
+            } catch (e: Exception) {
+                lastError = e.javaClass.simpleName
             }
         }
         return null

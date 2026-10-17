@@ -2193,7 +2193,7 @@ class MapActivity : Activity() {
         }
         setStatus("Pauzeplekken zoeken\u2026")
         io.execute {
-            val list = Overpass.pois(line)
+            val list = try { Overpass.pois(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
             // Hoever langs de route ligt elke plek (dichtstbijzijnde routepunt, in km vanaf het begin).
             val cum = DoubleArray(line.size)
             for (i in 1 until line.size) cum[i] = cum[i - 1] + line[i - 1].distanceToAsDouble(line[i])
@@ -2209,7 +2209,7 @@ class MapActivity : Activity() {
             ui.post {
                 setStatus("")
                 if (sorted == null) {
-                    Toast.makeText(this, "Zoeken is niet gelukt. Heb je internet?", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Zoeken is niet gelukt (" + Overpass.lastError + "). Probeer het zo nog eens.", Toast.LENGTH_LONG).show()
                 } else if (sorted.isEmpty()) {
                     Toast.makeText(this, "Geen pauzeplekken gevonden langs de route", Toast.LENGTH_LONG).show()
                 } else {
