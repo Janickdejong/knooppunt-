@@ -160,6 +160,31 @@ class MapActivity : Activity() {
     private var dispLat = 0.0
     private var dispLon = 0.0
     private var dispHeading = 0f
+    private var dispArrow = 0f
+    private var compass = Float.NaN
+    private var sensors: android.hardware.SensorManager? = null
+    private val compassListener = object : android.hardware.SensorEventListener {
+        private val rot = FloatArray(9)
+        private val ori = FloatArray(3)
+        override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) {}
+        override fun onSensorChanged(e: android.hardware.SensorEvent) {
+            android.hardware.SensorManager.getRotationMatrixFromVector(rot, e.values)
+            // Rechtop op het stuur (de achterkant wijst vooruit) of plat in de hand: kies de juiste kijkrichting.
+            val upright = Math.abs(rot[8]) < 0.7f
+            val m = if (upright) FloatArray(9).also {
+                android.hardware.SensorManager.remapCoordinateSystem(rot, android.hardware.SensorManager.AXIS_X, android.hardware.SensorManager.AXIS_Z, it)
+            } else rot
+            android.hardware.SensorManager.getOrientation(m, ori)
+            var az = Math.toDegrees(ori[0].toDouble()).toFloat()
+            val here = me
+            if (here != null) {
+                val decl = android.hardware.GeomagneticField(here.latitude.toFloat(), here.longitude.toFloat(), 0f, System.currentTimeMillis()).declination
+                az += decl
+            }
+            az = (az + 360f) % 360f
+            compass = if (compass.isNaN()) az else (compass + angleDiff(az, compass) * 0.12f + 360f) % 360f
+        }
+    }
     private var targetHeading = 0f
     private var dispZoom = 17.3
     private var targetZoom = 17.3
@@ -373,12 +398,15 @@ class MapActivity : Activity() {
 
         // Onderbalk tijdens het fietsen: resterende tijd, afstand, aankomst en stoppen.
         navBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             background = rounded(night, 18)
             elevation = dp(8).toFloat()
             setPadding(dp(18), dp(10), dp(12), dp(10))
             visibility = View.GONE
+        }
+        val navRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
         val etaColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         etaMain = TextView(this).apply {
@@ -387,6 +415,7 @@ class MapActivity : Activity() {
             setTextColor(Color.parseColor("#8BE0A8"))
         }
         etaSub = TextView(this).apply {
+            maxLines = 1
             textSize = 14f
             setTextColor(Color.parseColor("#93A3B8"))
         }
@@ -398,8 +427,7 @@ class MapActivity : Activity() {
         }
         etaColumn.addView(etaMain)
         etaColumn.addView(etaSub)
-        etaColumn.addView(etaNext)
-        navBar.addView(etaColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        navRow.addView(etaColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val stop = TextView(this).apply {
             text = "Stop"
             textSize = 17f
@@ -421,17 +449,19 @@ class MapActivity : Activity() {
             setOnClickListener { skipNext() }
         }
         pauseBtn = TextView(this).apply {
-            text = "\u23F8"
-            textSize = 20f
+            text = "\u275A\u275A"
+            textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = rounded(Color.parseColor("#34465C"), 16)
             setPadding(dp(14), dp(8), dp(14), dp(8))
             setOnClickListener { togglePause() }
         }
-        navBar.addView(pauseBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
-        navBar.addView(skipBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
-        navBar.addView(stop)
+        navRow.addView(pauseBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
+        navRow.addView(skipBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
+        navRow.addView(stop)
+        navBar.addView(navRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        navBar.addView(etaNext, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         root.addView(navBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.BOTTOM
             setMargins(dp(8), 0, dp(8), dp(8))
@@ -922,6 +952,7 @@ class MapActivity : Activity() {
             dispLat = here.latitude
             dispLon = here.longitude
             dispHeading = targetHeading
+            dispArrow = targetHeading
             dispZoom = navZoom
         }
         if (!frameOn) {
@@ -981,7 +1012,10 @@ class MapActivity : Activity() {
                 dispZoom += (targetZoom - dispZoom) * (1.0 - Math.exp(-dt / 0.9))
                 val pos = GeoPoint(dispLat, dispLon)
                 overlay.me = pos
-                overlay.meHeading = dispHeading
+                // De pijl is jouw echte richting: GPS als je rijdt, anders het kompas van de telefoon.
+                val arrowTarget = if (lastSpeed >= 2f && heading >= 0f) heading else if (!compass.isNaN()) compass else dispHeading
+                dispArrow = (dispArrow + angleDiff(arrowTarget, dispArrow) * (1.0 - Math.exp(-dt / 0.25)).toFloat() + 360f) % 360f
+                overlay.meHeading = dispArrow
                 if (!free) {
                     map.mapOrientation = -dispHeading
                     map.controller.setZoom(dispZoom)
@@ -995,7 +1029,7 @@ class MapActivity : Activity() {
                     map.controller.setCenter(center)
                 }
                 val settled = lastSpeed < 1.0f && abs(tLat - dispLat) < 1e-7 && abs(tLon - dispLon) < 1e-7 &&
-                    abs(angleDiff(targetHeading, dispHeading)) < 0.3f && abs(targetZoom - dispZoom) < 0.01
+                    abs(angleDiff(targetHeading, dispHeading)) < 0.3f && abs(angleDiff(arrowTarget, dispArrow)) < 1.5f && abs(targetZoom - dispZoom) < 0.01
                 if (!settled || free) map.invalidate()
                 if (settled && !free) {
                     // Stilstaan: nauwelijks tekenen, om de accu te sparen.
@@ -1331,9 +1365,15 @@ class MapActivity : Activity() {
             startLocation()
         }
         navigating = true
+        try {
+            val sm = sensors ?: (getSystemService(Context.SENSOR_SERVICE) as android.hardware.SensorManager).also { sensors = it }
+            compass = Float.NaN
+            sm.registerListener(compassListener, sm.getDefaultSensor(android.hardware.Sensor.TYPE_ROTATION_VECTOR), android.hardware.SensorManager.SENSOR_DELAY_UI)
+        } catch (_: Exception) {
+        }
         skipBtn.visibility = if (trip == null) View.VISIBLE else View.GONE
         skipBackup = null
-        pauseBtn.text = "\u23F8"
+        pauseBtn.text = "\u275A\u275A"
         pauseBtn.background = rounded(Color.parseColor("#34465C"), 16)
         computePassNodes()
         guideFailed = false
@@ -1375,6 +1415,10 @@ class MapActivity : Activity() {
     }
 
     private fun stopNavigation() {
+        try {
+            sensors?.unregisterListener(compassListener)
+        } catch (_: Exception) {
+        }
         overlay.passNodes = emptyList()
         voice.stop()
         camInit = false
@@ -1407,7 +1451,7 @@ class MapActivity : Activity() {
     private fun togglePause() {
         val r = ride ?: return
         r.paused = !r.paused
-        pauseBtn.text = if (r.paused) "\u25B6" else "\u23F8"
+        pauseBtn.text = if (r.paused) "\u25B6" else "\u275A\u275A"
         pauseBtn.background = rounded(if (r.paused) Color.parseColor("#C98A12") else Color.parseColor("#34465C"), 16)
         Toast.makeText(this, if (r.paused) "Pauze: je rijtijd loopt niet door" else "Verder met fietsen", Toast.LENGTH_SHORT).show()
         me?.let { updateNavigation(it) }
@@ -1529,7 +1573,7 @@ class MapActivity : Activity() {
         etaMain.text = if (minutes >= 60) "${minutes / 60} u ${minutes % 60} min" else "$minutes min"
         val arrive = Calendar.getInstance().apply { add(Calendar.SECOND, secs.toInt()) }
         val clock = String.format(Locale("nl", "NL"), "%02d:%02d", arrive.get(Calendar.HOUR_OF_DAY), arrive.get(Calendar.MINUTE))
-        etaSub.text = if (ride?.paused == true) "Pauze \u00B7 " + formatKm(meters) + " te gaan" else formatKm(meters) + " \u00B7 aankomst " + clock
+        etaSub.text = if (ride?.paused == true) "Pauze \u00B7 " + formatKm(meters) else formatKm(meters) + " \u00B7 " + clock
     }
 
     private fun fitTo(a: GeoPoint, b: GeoPoint) {
