@@ -24,7 +24,21 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq osmium-tool
           curl -sSL --retry 3 -o nl.osm.pbf https://download.geofabrik.de/europe/netherlands-latest.osm.pbf
-          osmium tags-filter nl.osm.pbf r/network=rcn n/rcn_ref -o gefilterd.osm --overwrite
+          osmium tags-filter nl.osm.pbf r/network=rcn n/rcn_ref -o nl.filtered.pbf --overwrite
+          rm -f nl.osm.pbf
+          FILES="nl.filtered.pbf"
+          # Aangrenzende gebieden: Vlaanderen/België en de Duitse grensdeelstaten. Mislukt er een, dan gaat het zonder verder.
+          for gebied in europe/belgium europe/germany/nordrhein-westfalen europe/germany/niedersachsen; do
+            naam=$(basename "$gebied")
+            if curl -sSL --retry 3 -o "$naam.osm.pbf" "https://download.geofabrik.de/$gebied-latest.osm.pbf" \
+              && osmium tags-filter "$naam.osm.pbf" r/network=rcn n/rcn_ref -o "$naam.filtered.pbf" --overwrite; then
+              FILES="$FILES $naam.filtered.pbf"
+            else
+              echo "Overgeslagen: $naam"
+            fi
+            rm -f "$naam.osm.pbf"
+          done
+          osmium merge $FILES -o gefilterd.osm --overwrite
           mkdir -p app/src/main/assets
           python3 tools/build_data.py gefilterd.osm app/src/main/assets/knooppunten.json
           ls -la app/src/main/assets
