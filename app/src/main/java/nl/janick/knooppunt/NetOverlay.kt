@@ -28,6 +28,11 @@ class NetOverlay(private val dens: Float) : Overlay() {
     @Volatile var passNodes: List<KNode> = emptyList()
     @Volatile var pois: List<Poi> = emptyList()
     @Volatile var towns: List<Town> = emptyList()
+    var onPoiTap: ((List<Poi>) -> Unit)? = null
+    private class PoiGroup(val x: Float, val y: Float, val items: ArrayList<Poi>)
+    private var poiGroups: List<PoiGroup> = emptyList()
+    private val poiRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#8A5A2B") }
+    private val poiText = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; color = Color.parseColor("#5A3A1A"); typeface = Typeface.DEFAULT_BOLD }
     var onTownTap: ((Town) -> Unit)? = null
     private val townPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1D2733"); typeface = android.graphics.Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
     private val townBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
@@ -215,24 +220,39 @@ class NetOverlay(private val dens: Float) : Overlay() {
             c.restore()
         }
 
+        // Pauzeplekken: dicht op elkaar samenvoegen tot één bolletje met het aantal, anders wordt het een kluwen.
+        val groups = ArrayList<PoiGroup>()
         if (pois.isNotEmpty()) {
-            val pr = 11f * dens
-            fill.color = Color.parseColor("#8A5A2B")
-            text.textSize = pr * 0.95f
-            val fm2 = text.fontMetrics
-            val off2 = -(fm2.ascent + fm2.descent) / 2f
+            val pr = 13f * dens
+            val join = 30f * dens
             for (poi in pois) {
                 pj.toPixels(poi.pos, tmp)
-                if (tmp.x < -pr || tmp.y < -pr || tmp.x > osmv.width + pr || tmp.y > osmv.height + pr) continue
-                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), pr + 2f * dens, fillWhite)
-                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), pr, fill)
-                text.color = Color.WHITE
+                val g = groups.firstOrNull { Math.hypot((it.x - tmp.x).toDouble(), (it.y - tmp.y).toDouble()) < join }
+                if (g != null) g.items.add(poi) else groups.add(PoiGroup(tmp.x.toFloat(), tmp.y.toFloat(), arrayListOf(poi)))
+            }
+            for (g in groups) {
+                if (g.x < -pr || g.y < -pr || g.x > osmv.width + pr || g.y > osmv.height + pr) continue
                 c.save()
-                c.rotate(-osmv.mapOrientation, tmp.x.toFloat(), tmp.y.toFloat())
-                c.drawText(poi.letter, tmp.x.toFloat(), tmp.y + off2, text)
+                c.rotate(-osmv.mapOrientation, g.x, g.y)
+                if (g.items.size == 1) {
+                    val poi = g.items[0]
+                    c.drawCircle(g.x, g.y, pr + 2f * dens, poiRing)
+                    c.drawCircle(g.x, g.y, pr, fillWhite)
+                    poiText.textSize = if (poi.letter.length > 1 && poi.kind == "toilets") pr * 0.8f else pr * 1.05f
+                    val fm2 = poiText.fontMetrics
+                    c.drawText(poi.letter, g.x, g.y - (fm2.ascent + fm2.descent) / 2f, poiText)
+                } else {
+                    c.drawCircle(g.x, g.y, pr + 2f * dens, fillWhite)
+                    c.drawCircle(g.x, g.y, pr, poiRing)
+                    text.color = Color.WHITE
+                    text.textSize = pr * 1.0f
+                    val fm2 = text.fontMetrics
+                    c.drawText(g.items.size.toString(), g.x, g.y - (fm2.ascent + fm2.descent) / 2f, text)
+                }
                 c.restore()
             }
         }
+        poiGroups = groups
 
         val m = me
         if (m != null) {
@@ -294,6 +314,12 @@ class NetOverlay(private val dens: Float) : Overlay() {
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val pj = mapView.projection
         val tp = tapPoint(e, mapView)
+        for (g in poiGroups) {
+            if (Math.hypot((g.x - tp.x).toDouble(), (g.y - tp.y).toDouble()) < 24f * dens) {
+                onPoiTap?.invoke(g.items)
+                return true
+            }
+        }
         for (t in towns) {
             if (townBox(t, pj).contains(tp.x.toFloat(), tp.y.toFloat())) {
                 onTownTap?.invoke(t)

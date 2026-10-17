@@ -255,6 +255,7 @@ class MapActivity : Activity() {
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         overlay.onTownTap = { t -> openInMaps(t.name, t.pos) }
+        overlay.onPoiTap = { list -> if (list.size == 1) poiActions(list[0]) else poiGroup(list) }
         overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
         map.overlays.add(RotationGestureOverlay(map).apply { isEnabled = true })
@@ -518,16 +519,6 @@ class MapActivity : Activity() {
         row.addView(iconButton("\u2630", "Routes") { openRoutes() })
         row.addView(iconButton("\u22EF", "Meer") { openMore() })
         bottomBar.addView(row)
-        // Bronvermelding van de kaart, zoals OpenStreetMap vraagt.
-        bottomBar.addView(TextView(this).apply {
-            text = "Kaart \u00A9 OpenStreetMap-bijdragers"
-            textSize = 10f
-            setTextColor(muted)
-            gravity = Gravity.CENTER
-            setOnClickListener {
-                try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.openstreetmap.org/copyright"))) } catch (_: Exception) {}
-            }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(bottomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.BOTTOM
             setMargins(dp(10), 0, dp(10), dp(10))
@@ -2151,7 +2142,11 @@ class MapActivity : Activity() {
                 listRow("GPX openen", "Een route van iemand anders navigeren", glyph("\u2191")) { d.dismiss(); pickGpx() },
                 listRow("Route als GPX bewaren", "Voor een fietscomputer of andere app", glyph("\u2193")) { d.dismiss(); exportGpx() },
                 listRow("Route offline opslaan", "Kaart langs je route zonder bereik", glyph("\u2B07")) { d.dismiss(); downloadOffline() },
-                listRow("Mijn ritten", "Wat je gefietst hebt", glyph("\u2630")) { d.dismiss(); openRides() }
+                listRow("Mijn ritten", "Wat je gefietst hebt", glyph("\u2630")) { d.dismiss(); openRides() },
+                listRow("Over de kaart", "Kaart en gegevens \u00A9 OpenStreetMap-bijdragers", glyph("\u00A9")) {
+                    d.dismiss()
+                    try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.openstreetmap.org/copyright"))) } catch (_: Exception) {}
+                }
             )
         }, actions = listOf(SheetAction("Sluiten", false) {}))
     }
@@ -2410,25 +2405,29 @@ class MapActivity : Activity() {
 
     private fun poiActions(p: Poi) {
         sheet(p.name, p.label, actions = listOf(
-            SheetAction("Open in Maps", true) {
-                val q = android.net.Uri.encode(p.name)
-                val geo = android.net.Uri.parse("geo:${p.pos.latitude},${p.pos.longitude}?q=${p.pos.latitude},${p.pos.longitude}($q)")
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, geo))
-                } catch (_: Exception) {
-                    Toast.makeText(this, "Geen kaart-app gevonden", Toast.LENGTH_SHORT).show()
-                }
-            },
+            SheetAction("Open in Maps", true) { openInMaps(p.name, p.pos) },
             SheetAction("Fietsen hierheen", false) { bikeTo(Place(p.name, "", p.pos.latitude, p.pos.longitude)) },
             SheetAction("Sluiten", false) {}
         ))
     }
 
+    /** Meerdere plekken op één punt: kies er een uit de lijst. */
+    private fun poiGroup(list: List<Poi>) {
+        sheet(list.size.toString() + " plekken hier", content = { d ->
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            for (p in list) {
+                c.addView(listRow(p.letter + "  " + p.name, p.label, null) { d.dismiss(); poiActions(p) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+            }
+            c
+        }, actions = listOf(SheetAction("Sluiten", false) {}))
+    }
+
     private fun showPoiList(items: List<Pair<Poi, Double>>, total: Double) {
-        sheet("Pauzeplekken", "Tik op een plek voor Maps. Halverwege is bij " + formatKm(total / 2), content = { d ->
+        sheet("Pauzeplekken", "Ook op de kaart te tikken. Halverwege is bij " + formatKm(total / 2), content = { d ->
             val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             for ((p, at) in items.take(40)) {
-                val row = listRow(p.name, p.label + " \u00B7 na " + formatKm(at), null) {
+                val row = listRow(p.letter + "  " + p.name, p.label + " \u00B7 na " + formatKm(at), null) {
                     d.dismiss()
                     map.controller.animateTo(p.pos)
                     map.controller.setZoom(16.5)

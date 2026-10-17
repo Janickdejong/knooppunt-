@@ -25,7 +25,7 @@ class Poi(val name: String, val kind: String, val pos: GeoPoint) {
         "sight" -> "Bezienswaardig"
         else -> "Snack"
     }
-    val letter: String get() = when (kind) { "toilets" -> "WC"; "cafe" -> "C"; "restaurant" -> "R"; "pub" -> "K"; "ice_cream" -> "I"; "sight" -> "\u2605"; else -> "S" }
+    val letter: String get() = when (kind) { "toilets" -> "WC"; "cafe" -> "\u2615"; "restaurant" -> "\uD83C\uDF74"; "pub" -> "\uD83C\uDF7A"; "ice_cream" -> "\uD83C\uDF66"; "sight" -> "\u2605"; else -> "\uD83C\uDF5F" }
 }
 
 /** Een fietsknooppunt (rcn_ref in OpenStreetMap). */
