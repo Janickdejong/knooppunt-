@@ -125,6 +125,8 @@ class MapActivity : Activity() {
     private lateinit var locateButton: TextView
     private var heading = -1f
     private var smoothHeading = 0f
+    private var lastFix: GeoPoint? = null
+    private var navZoom = 17.3
     private var avgSpeed = 0.0
     private var navFitted = false
     private var mainTrack: Track? = null
@@ -554,7 +556,14 @@ class MapActivity : Activity() {
         val here = GeoPoint(location.latitude, location.longitude)
         me = here
         overlay.me = here
-        if (location.hasBearing() && location.speed > 1f) heading = location.bearing
+        if (location.hasBearing() && location.speed > 0.7f) {
+            heading = location.bearing
+        } else {
+            // Geen richting van de GPS (langzaam of stilstaand): afleiden uit de verplaatsing.
+            val last = lastFix
+            if (last != null && last.distanceToAsDouble(here) > 4.0) heading = last.bearingTo(here).toFloat()
+        }
+        if (lastFix == null || lastFix!!.distanceToAsDouble(here) > 4.0) lastFix = here
         if (!centeredOnMe && !hadSavedCenter) {
             centeredOnMe = true
             map.controller.setZoom(14.0)
@@ -583,11 +592,25 @@ class MapActivity : Activity() {
 
     /** De kaart draait mee met je rijrichting en jij staat lager in beeld, zoals in een autonavigatie. */
     private fun followMe(here: GeoPoint) {
-        if (wasOffRoute && guide == null) return
-        if (heading < 0f) {
+        val active = guide ?: mainTrack
+        var h = heading
+        if (h < 0f) {
+            // Nog niet bewogen: kijk naar de route, dan staat de kaart meteen goed.
+            val a = active?.aim()
+            if (a != null && a.distanceToAsDouble(here) > 8.0) h = here.bearingTo(a).toFloat()
+        }
+        // Inzoomen in wijken: dichter bij een bocht en bij lage snelheid, wat verder weg op rechte stukken.
+        val turnDist = active?.turnAhead(250.0)?.first ?: 999.0
+        val kmh = (avgSpeed * 3.6)
+        var target = if (kmh < 12.0) 17.8 else if (kmh < 22.0) 17.4 else 17.0
+        if (turnDist < 70.0) target = 18.4 else if (turnDist < 160.0) target = maxOf(target, 17.9)
+        navZoom += (target - navZoom) * 0.18
+        map.controller.setZoom(navZoom)
+        if (h < 0f) {
             map.controller.animateTo(here)
             return
         }
+        heading = h
         var d = heading - smoothHeading
         while (d > 180f) d -= 360f
         while (d < -180f) d += 360f
@@ -877,10 +900,13 @@ class MapActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateMode()
         val here = me
-        map.controller.setZoom(17.0)
+        navZoom = 17.3
+        lastFix = null
+        map.controller.setZoom(navZoom)
         if (here != null) {
             map.controller.setCenter(here)
             updateNavigation(here)
+            followMe(here)
         } else {
             map.controller.setCenter(routeNodes.first().pos)
             renderNav(TurnArrowView.POINTER, 0f, "GPS\u2026", "Wachten op je locatie", routeNodes.first().ref, "", false)
@@ -1012,17 +1038,11 @@ class MapActivity : Activity() {
                 val line = if (guideFetching) "Route zoeken\u2026" else "Ga in deze richting"
                 renderNav(TurnArrowView.POINTER, relativeBearing(here, goal), formatDistance(straight), line, goalNode.ref, "$what \u00B7 ${formatDistance(straight)}", !toStart)
                 remainingAll = (if (toStart) navCum[navCum.size - 1] else remaining) + straight
-                if (toStart && !navFitted) {
-                    navFitted = true
-                    fitTo(here, goal)
-                } else if (!toStart && justOff) {
-                    fitTo(here, goal)
-                }
+                navFitted = true
             }
         } else {
             if (guide != null) {
                 clearGuide()
-                map.controller.setZoom(17.0)
             }
             overlay.nextId = next.id
             mainTrack?.progress = navProgress
@@ -1058,8 +1078,6 @@ class MapActivity : Activity() {
                     guide = Track(pts)
                     guideTarget = goal
                     overlay.guide = pts
-                    map.controller.setZoom(16.0)
-                    map.controller.setCenter(here)
                     me?.let { updateNavigation(it) }
                     map.invalidate()
                 }
