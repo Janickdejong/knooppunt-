@@ -278,13 +278,6 @@ class NetOverlay(private val dens: Float) : Overlay() {
 
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val pj = mapView.projection
-        for (p in pois) {
-            pj.toPixels(p.pos, tmp)
-            if (Math.hypot((tmp.x - e.x).toDouble(), (tmp.y - e.y).toDouble()) < 22f * dens) {
-                onPoiTap?.invoke(p)
-                return true
-            }
-        }
         for (t in towns) {
             if (townBox(t, pj).contains(e.x, e.y)) {
                 onTownTap?.invoke(t)

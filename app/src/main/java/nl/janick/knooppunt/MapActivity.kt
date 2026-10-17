@@ -252,7 +252,6 @@ class MapActivity : Activity() {
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         overlay.onTownTap = { t -> openInMaps(t.name, t.pos) }
-        overlay.onPoiTap = { p -> openInMaps(p.name, p.pos) }
         overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
         map.overlays.add(RotationGestureOverlay(map).apply { isEnabled = true })
@@ -2112,7 +2111,7 @@ class MapActivity : Activity() {
         sheet("Meer", content = { d ->
             column(
                 listRow("Rondje van X km", "Een lus vanaf waar je nu bent", glyph("\u21BB")) { d.dismiss(); askLoop() },
-                listRow("Onderweg verkennen", "Plaatsen en bezienswaardigheden langs de route", glyph("\u2605")) { d.dismiss(); explore() },
+                listRow("Onderweg verkennen", "Plaatsnamen op de kaart, tik voor Google Maps", glyph("\u2605")) { d.dismiss(); explore() },
                 listRow("Pauzeplekken", "Cafés en toiletten langs de route", glyph("\u2615")) { d.dismiss(); findPois() },
                 listRow("Route delen", "Stuur de route naar iemand anders", glyph("\u2197")) { d.dismiss(); shareRoute() },
                 listRow("GPX openen", "Een route van iemand anders navigeren", glyph("\u2191")) { d.dismiss(); pickGpx() },
@@ -2338,13 +2337,7 @@ class MapActivity : Activity() {
         }
         setStatus("Route verkennen\u2026")
         io.execute {
-            // Plaatsen en bezienswaardigheden tegelijk ophalen.
-            var sightsRes: List<Poi>? = null
-            val sightThread = Thread { sightsRes = try { Overpass.sights(line) } catch (e: Exception) { null } }
-            sightThread.start()
             val towns = try { Overpass.towns(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
-            sightThread.join()
-            val sights = sightsRes
             val cum = DoubleArray(line.size)
             for (i in 1 until line.size) cum[i] = cum[i - 1] + line[i - 1].distanceToAsDouble(line[i])
             fun at(pos: GeoPoint): Double {
@@ -2357,16 +2350,14 @@ class MapActivity : Activity() {
                 return cum[bi]
             }
             val t = towns?.map { it to at(it.pos) }?.sortedBy { it.second }
-            val sg = sights?.map { it to at(it.pos) }?.sortedBy { it.second }
             ui.post {
                 setStatus("")
-                if (t == null && sg == null) {
+                if (t == null) {
                     Toast.makeText(this, "Verkennen is niet gelukt (" + Overpass.lastError + "). Probeer het zo nog eens.", Toast.LENGTH_LONG).show()
                 } else {
-                    overlay.pois = sg?.map { it.first } ?: emptyList()
-                    overlay.towns = t?.map { it.first } ?: emptyList()
+                    overlay.towns = t.map { it.first }
                     map.invalidate()
-                    Toast.makeText(this, "Tik op een plaatsnaam of ster voor Google Maps. Nog eens op Onderweg verkennen haalt ze weg.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Tik op een plaatsnaam voor Google Maps. Nog eens op Onderweg verkennen haalt ze weg.", Toast.LENGTH_LONG).show()
                 }
             }
         }
