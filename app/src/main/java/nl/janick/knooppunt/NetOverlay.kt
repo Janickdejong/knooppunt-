@@ -24,6 +24,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var meHeading: Float = Float.NaN
     var guide: List<GeoPoint> = emptyList()
     var onNodeTap: ((KNode) -> Unit)? = null
+    var onUserMove: (() -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
     private val path = Path()
@@ -200,6 +201,12 @@ class NetOverlay(private val dens: Float) : Overlay() {
                 c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), 8f * dens, meFill)
             }
         }
+    }
+
+    override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
+        val a = event.actionMasked
+        if (a == MotionEvent.ACTION_MOVE || a == MotionEvent.ACTION_POINTER_DOWN) onUserMove?.invoke()
+        return false
     }
 
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {

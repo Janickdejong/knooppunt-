@@ -143,6 +143,8 @@ class MapActivity : Activity() {
     private var smoothHeading = 0f
     private var lastFix: GeoPoint? = null
     private var navZoom = 17.3
+    // Zolang je zelf de kaart verschuift of zoomt, blijft de kaart staan waar jij hem zet.
+    private var freeUntil = 0L
     private var avgSpeed = 0.0
     private var navFitted = false
     private var mainTrack: Track? = null
@@ -197,6 +199,7 @@ class MapActivity : Activity() {
         }
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
+        overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
         map.overlays.add(overlay)
         root.addView(map, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -831,6 +834,7 @@ class MapActivity : Activity() {
 
     /** De kaart draait mee met je rijrichting en jij staat lager in beeld, zoals in een autonavigatie. */
     private fun followMe(here: GeoPoint) {
+        if (System.currentTimeMillis() < freeUntil) return
         val active = guide ?: mainTrack
         var h = heading
         if (h < 0f) {
@@ -873,6 +877,11 @@ class MapActivity : Activity() {
     }
 
     private fun goToMe() {
+        freeUntil = 0L
+        if (navigating) {
+            me?.let { followMe(it) }
+            return
+        }
         val here = me
         if (here == null) {
             Toast.makeText(this, "Je locatie is nog niet gevonden", Toast.LENGTH_SHORT).show()
@@ -1149,6 +1158,7 @@ class MapActivity : Activity() {
         updateMode()
         val here = if (meAccuracy <= 75f) me else null
         navZoom = 17.3
+        freeUntil = 0L
         lastFix = null
         map.controller.setZoom(navZoom)
         if (here != null) {
