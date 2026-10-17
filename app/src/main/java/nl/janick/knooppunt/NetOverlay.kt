@@ -27,6 +27,18 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var onUserMove: (() -> Unit)? = null
     @Volatile var passNodes: List<KNode> = emptyList()
     @Volatile var pois: List<Poi> = emptyList()
+    @Volatile var towns: List<Town> = emptyList()
+    var onTownTap: ((Town) -> Unit)? = null
+    private val townPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1D2733"); typeface = android.graphics.Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
+    private val townBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val townRect = android.graphics.RectF()
+    private fun townBox(t: Town, pj: org.osmdroid.views.Projection): android.graphics.RectF {
+        pj.toPixels(t.pos, tmp)
+        townPaint.textSize = 14f * dens
+        val w = townPaint.measureText(t.name) + 20f * dens
+        val h = 28f * dens
+        return android.graphics.RectF(tmp.x - w / 2, tmp.y - h / 2, tmp.x + w / 2, tmp.y + h / 2)
+    }
     var onNodeLong: ((KNode) -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
@@ -182,6 +194,20 @@ class NetOverlay(private val dens: Float) : Overlay() {
             }
         }
 
+        for (t in towns) {
+            val r = townBox(t, pj)
+            if (r.right < 0 || r.bottom < 0 || r.left > osmv.width || r.top > osmv.height) continue
+            townRect.set(r)
+            townBg.color = Color.WHITE
+            c.drawRoundRect(townRect, 14f * dens, 14f * dens, townBg)
+            townBg.color = Color.parseColor("#8A5A2B")
+            townBg.style = Paint.Style.STROKE
+            townBg.strokeWidth = 2f * dens
+            c.drawRoundRect(townRect, 14f * dens, 14f * dens, townBg)
+            townBg.style = Paint.Style.FILL
+            c.drawText(t.name, r.centerX(), r.centerY() + townPaint.textSize * 0.35f, townPaint)
+        }
+
         if (pois.isNotEmpty()) {
             val pr = 11f * dens
             fill.color = Color.parseColor("#8A5A2B")
@@ -250,6 +276,13 @@ class NetOverlay(private val dens: Float) : Overlay() {
     }
 
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
+        val pj = mapView.projection
+        for (t in towns) {
+            if (townBox(t, pj).contains(e.x, e.y)) {
+                onTownTap?.invoke(t)
+                return true
+            }
+        }
         val hit = nodeAt(e, mapView) ?: return false
         onNodeTap?.invoke(hit)
         return true

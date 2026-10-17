@@ -251,6 +251,7 @@ class MapActivity : Activity() {
         }
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
+        overlay.onTownTap = { t -> townInfo(t) }
         overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
         map.overlays.add(RotationGestureOverlay(map).apply { isEnabled = true })
@@ -2350,6 +2351,7 @@ class MapActivity : Activity() {
                     Toast.makeText(this, "Verkennen is niet gelukt (" + Overpass.lastError + "). Probeer het zo nog eens.", Toast.LENGTH_LONG).show()
                 } else {
                     overlay.pois = sg?.map { it.first } ?: emptyList()
+                    overlay.towns = t?.map { it.first } ?: emptyList()
                     map.invalidate()
                     showExplore(t ?: emptyList(), sg ?: emptyList(), cum.last())
                 }
@@ -2358,7 +2360,7 @@ class MapActivity : Activity() {
     }
 
     private fun showExplore(towns: List<Pair<Town, Double>>, sights: List<Pair<Poi, Double>>, total: Double) {
-        sheet("Onderweg", formatKm(total) + " \u00B7 " + towns.size + " plaatsen \u00B7 " + sights.size + " bezienswaardigheden", content = { d ->
+        sheet("Onderweg", "Tik ook op een plaatsnaam op de kaart. " + formatKm(total) + " \u00B7 " + towns.size + " plaatsen \u00B7 " + sights.size + " bezienswaardigheden", content = { d ->
             val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             fun header(t: String) = c.addView(TextView(this).apply {
                 text = t
@@ -2384,7 +2386,7 @@ class MapActivity : Activity() {
             }
             ScrollView(this).apply { addView(c) }
         }, actions = listOf(
-            SheetAction("Verberg markeringen", false) { overlay.pois = emptyList(); map.invalidate() },
+            SheetAction("Verberg markeringen", false) { overlay.pois = emptyList(); overlay.towns = emptyList(); map.invalidate() },
             SheetAction("Sluiten", true) {}
         ))
     }
