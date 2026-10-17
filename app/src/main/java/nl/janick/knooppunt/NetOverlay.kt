@@ -212,7 +212,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
 
     private fun nodeAt(e: MotionEvent, mapView: MapView): KNode? {
         val n = net ?: return null
-        if (navigating || mapView.zoomLevelDouble < 11.0) return null
+        if (navigating || mapView.zoomLevelDouble < SHOW_FROM) return null
         val pj = mapView.projection
         val limit = 30f * dens
         var best: KNode? = null
@@ -240,5 +240,10 @@ class NetOverlay(private val dens: Float) : Overlay() {
         val hit = nodeAt(e, mapView) ?: return false
         onNodeLong?.invoke(hit)
         return true
+    }
+
+    companion object {
+        /** Vanaf dit zoomniveau tonen we alle knooppunten en verbindingen. */
+        const val SHOW_FROM = 12.5
     }
 }
