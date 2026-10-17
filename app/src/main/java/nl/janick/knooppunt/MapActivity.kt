@@ -51,6 +51,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.hypot
@@ -149,6 +150,7 @@ class MapActivity : Activity() {
 
     // Vloeiende camera: de GPS geeft maar één keer per seconde een plek, daartussen schuift de kaart zelf mee.
     private var lastSpeed = 0f
+    private var idleWait = false
     private var camInit = false
     private var headingKnown = false
     private var dispLat = 0.0
@@ -888,6 +890,10 @@ class MapActivity : Activity() {
             frameOn = true
             lastFrameNs = 0L
             map.postOnAnimation(frame)
+        } else if (idleWait) {
+            idleWait = false
+            map.removeCallbacks(frame)
+            map.postOnAnimation(frame)
         }
     }
 
@@ -905,7 +911,12 @@ class MapActivity : Activity() {
                 return
             }
             val nowNs = System.nanoTime()
-            val dt = if (lastFrameNs == 0L) 0.016 else ((nowNs - lastFrameNs) / 1e9).coerceIn(0.001, 0.1)
+            if (lastFrameNs != 0L && nowNs - lastFrameNs < 28_000_000L) {
+                // Maximaal ~30 beelden per seconde: genoeg voor vloeiend en veel zuiniger.
+                map.postOnAnimation(this)
+                return
+            }
+            val dt = if (lastFrameNs == 0L) 0.033 else ((nowNs - lastFrameNs) / 1e9).coerceIn(0.001, 0.2)
             lastFrameNs = nowNs
             val fp = fixPos
             val free = System.currentTimeMillis() < freeUntil
@@ -945,8 +956,18 @@ class MapActivity : Activity() {
                     val center = if (px > 0.5) pos.destinationPoint(map.height * 0.22 * (100.0 / px), dispHeading.toDouble()) else pos
                     map.controller.setCenter(center)
                 }
-                map.invalidate()
+                val settled = lastSpeed < 1.0f && abs(tLat - dispLat) < 1e-7 && abs(tLon - dispLon) < 1e-7 &&
+                    abs(angleDiff(targetHeading, dispHeading)) < 0.3f && abs(targetZoom - dispZoom) < 0.01
+                if (!settled || free) map.invalidate()
+                if (settled && !free) {
+                    // Stilstaan: nauwelijks tekenen, om de accu te sparen.
+                    idleWait = true
+                    lastFrameNs = 0L
+                    map.postDelayed(this, 400)
+                    return
+                }
             }
+            idleWait = false
             map.postOnAnimation(this)
         }
     }
