@@ -769,6 +769,7 @@ class MapActivity : Activity() {
         super.onResume()
         map.onResume()
         startLocation()
+        handleIntent(intent)
     }
 
     override fun onPause() {
@@ -2011,6 +2012,9 @@ class MapActivity : Activity() {
         sheet("Meer", content = { d ->
             column(
                 listRow("Rondje van X km", "Een lus vanaf waar je nu bent", glyph("\u21BB")) { d.dismiss(); askLoop() },
+                listRow("Pauzeplekken", "Cafés en toiletten langs de route", glyph("\u2615")) { d.dismiss(); findPois() },
+                listRow("Route delen", "Stuur de route naar iemand anders", glyph("\u2197")) { d.dismiss(); shareRoute() },
+                listRow("GPX openen", "Een route van iemand anders navigeren", glyph("\u2191")) { d.dismiss(); pickGpx() },
                 listRow("Route als GPX bewaren", "Voor een fietscomputer of andere app", glyph("\u2193")) { d.dismiss(); exportGpx() },
                 listRow("Route offline opslaan", "Kaart langs je route zonder bereik", glyph("\u2B07")) { d.dismiss(); downloadOffline() },
                 listRow("Mijn ritten", "Wat je gefietst hebt", glyph("\u2630")) { d.dismiss(); openRides() }
@@ -2181,9 +2185,165 @@ class MapActivity : Activity() {
         return sb.toString()
     }
 
+    private fun findPois() {
+        val line = if (navPts.size >= 2) navPts else legs.flatMap { it.pts }
+        if (line.size < 2) {
+            Toast.makeText(this, "Kies eerst een route", Toast.LENGTH_SHORT).show()
+            return
+        }
+        setStatus("Pauzeplekken zoeken\u2026")
+        io.execute {
+            val list = Overpass.pois(line)
+            // Hoever langs de route ligt elke plek (dichtstbijzijnde routepunt, in km vanaf het begin).
+            val cum = DoubleArray(line.size)
+            for (i in 1 until line.size) cum[i] = cum[i - 1] + line[i - 1].distanceToAsDouble(line[i])
+            val sorted = list?.map { p ->
+                var bi = 0
+                var bd = Double.MAX_VALUE
+                for (i in line.indices step 2) {
+                    val d = line[i].distanceToAsDouble(p.pos)
+                    if (d < bd) { bd = d; bi = i }
+                }
+                p to cum[bi]
+            }?.sortedBy { it.second }
+            ui.post {
+                setStatus("")
+                if (sorted == null) {
+                    Toast.makeText(this, "Zoeken is niet gelukt. Heb je internet?", Toast.LENGTH_LONG).show()
+                } else if (sorted.isEmpty()) {
+                    Toast.makeText(this, "Geen pauzeplekken gevonden langs de route", Toast.LENGTH_LONG).show()
+                } else {
+                    overlay.pois = sorted.map { it.first }
+                    map.invalidate()
+                    showPoiList(sorted, cum.last())
+                }
+            }
+        }
+    }
+
+    private fun showPoiList(items: List<Pair<Poi, Double>>, total: Double) {
+        sheet("Pauzeplekken", "Op de kaart gemarkeerd. Halverwege is bij " + formatKm(total / 2), content = { d ->
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            for ((p, at) in items.take(40)) {
+                val row = listRow(p.name, p.label + " \u00B7 na " + formatKm(at), null) {
+                    d.dismiss()
+                    map.controller.animateTo(p.pos)
+                    map.controller.setZoom(16.5)
+                }
+                c.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+            }
+            ScrollView(this).apply { addView(c) }
+        }, actions = listOf(
+            SheetAction("Verberg markeringen", false) { overlay.pois = emptyList(); map.invalidate() },
+            SheetAction("Sluiten", true) {}
+        ))
+    }
+
+    private fun shareRoute() {
+        if (legs.isEmpty() || trip != null) {
+            Toast.makeText(this, "Kies eerst minstens twee knooppunten", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val dir = File(cacheDir, "share").apply { mkdirs() }
+            val f = File(dir, "route-" + routeNodes.joinToString("-") { it.ref }.take(40) + ".gpx")
+            f.writeText(buildGpx())
+            val uri = android.net.Uri.parse("content://nl.janick.knooppunt.share/" + f.name)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/gpx+xml"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "Fietsroute " + formatKm(totalLength()))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Route delen").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        } catch (_: Exception) {
+            Toast.makeText(this, "Delen is niet gelukt", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun pickGpx() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        startActivityForResult(intent, REQ_OPEN)
+    }
+
+    /** Leest een GPX-bestand (van een andere app of uit je bestanden) en biedt aan het te navigeren. */
+    private fun importGpx(uri: android.net.Uri) {
+        io.execute {
+            val text = try {
+                contentResolver.openInputStream(uri)?.use { String(it.readBytes()) }
+            } catch (_: Exception) {
+                null
+            }
+            val pts = text?.let { parseGpx(it) }
+            val name = text?.let { Regex("<trk>\\s*<name>([^<]*)</name>").find(it)?.groupValues?.get(1)?.trim() }?.ifEmpty { null }
+            ui.post {
+                if (pts == null || pts.size < 2) {
+                    Toast.makeText(this, "In dit bestand staat geen route", Toast.LENGTH_LONG).show()
+                } else {
+                    var len = 0.0
+                    for (i in 1 until pts.size) len += pts[i - 1].distanceToAsDouble(pts[i])
+                    val title = name ?: "Gedeelde route"
+                    sheet(title, formatKm(len) + " \u00B7 " + pts.size + " punten", actions = listOf(
+                        SheetAction("Navigeren", true) {
+                            if (navigating) stopNavigation()
+                            trip = Place(title, "", pts.last().latitude, pts.last().longitude)
+                            routeNodes = listOf(KNode(-1L, "A", pts.first()), KNode(-2L, "\u2691", pts.last()))
+                            legs = listOf(Leg(pts, len, true))
+                            overlay.routeIds = emptySet()
+                            overlay.legs = legs
+                            buildNavigationLine()
+                            map.zoomToBoundingBox(BoundingBox.fromGeoPoints(pts).increaseByScale(1.3f), false)
+                            startNavigation()
+                        },
+                        SheetAction("Annuleren", false) {}
+                    ))
+                }
+            }
+        }
+    }
+
+    private fun parseGpx(text: String): List<GeoPoint>? {
+        val re = Regex("<(?:trkpt|rtept)\\s[^>]*?>")
+        var pts = re.findAll(text).mapNotNull { m ->
+            val la = Regex("lat=\"([-0-9.]+)\"").find(m.value)?.groupValues?.get(1)?.toDoubleOrNull()
+            val lo = Regex("lon=\"([-0-9.]+)\"").find(m.value)?.groupValues?.get(1)?.toDoubleOrNull()
+            if (la != null && lo != null) GeoPoint(la, lo) else null
+        }.toList()
+        if (pts.size > 4000) {
+            val step = pts.size / 4000.0
+            pts = (0 until 4000).map { pts[(it * step).toInt()] } + pts.last()
+        }
+        return if (pts.size >= 2) pts else null
+    }
+
+    private fun handleIntent(i: Intent?) {
+        i ?: return
+        val uri: android.net.Uri? = when (i.action) {
+            Intent.ACTION_VIEW -> i.data
+            Intent.ACTION_SEND -> @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM)
+            else -> null
+        }
+        if (uri != null) {
+            i.action = null
+            importGpx(uri)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_OPEN && resultCode == RESULT_OK) {
+            data?.data?.let { importGpx(it) }
+            return
+        }
         if (requestCode == REQ_GPX && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
             try {
@@ -2204,6 +2364,7 @@ class MapActivity : Activity() {
     companion object {
         private const val REQ_LOCATION = 1
         private const val REQ_GPX = 2
+        private const val REQ_OPEN = 3
         private const val OFF_ROUTE_METERS = 40.0
         private const val CELLS = 20.0
         private const val MAX_RETRIES = 5

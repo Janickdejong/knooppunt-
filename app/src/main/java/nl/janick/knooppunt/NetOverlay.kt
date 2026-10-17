@@ -26,6 +26,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     var onNodeTap: ((KNode) -> Unit)? = null
     var onUserMove: (() -> Unit)? = null
     @Volatile var passNodes: List<KNode> = emptyList()
+    @Volatile var pois: List<Poi> = emptyList()
     var onNodeLong: ((KNode) -> Unit)? = null
 
     private val green = Color.parseColor("#1B6B3A")
@@ -48,6 +49,7 @@ class NetOverlay(private val dens: Float) : Overlay() {
     private val brokenPaint = stroke(Color.parseColor("#F08A24"), 4f).apply {
         pathEffect = DashPathEffect(floatArrayOf(14f * dens, 10f * dens), 0f)
     }
+    private val fillWhite = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.WHITE }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -177,6 +179,22 @@ class NetOverlay(private val dens: Float) : Overlay() {
                     text.color = if (selected) Color.WHITE else Color.BLACK
                     c.drawText(node.ref, tmp.x.toFloat(), tmp.y + textOffset, text)
                 }
+            }
+        }
+
+        if (pois.isNotEmpty()) {
+            val pr = 11f * dens
+            fill.color = Color.parseColor("#8A5A2B")
+            text.textSize = pr * 0.95f
+            val fm2 = text.fontMetrics
+            val off2 = -(fm2.ascent + fm2.descent) / 2f
+            for (poi in pois) {
+                pj.toPixels(poi.pos, tmp)
+                if (tmp.x < -pr || tmp.y < -pr || tmp.x > osmv.width + pr || tmp.y > osmv.height + pr) continue
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), pr + 2f * dens, fillWhite)
+                c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), pr, fill)
+                text.color = Color.WHITE
+                c.drawText(poi.letter, tmp.x.toFloat(), tmp.y + off2, text)
             }
         }
 
