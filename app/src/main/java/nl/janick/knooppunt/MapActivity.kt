@@ -37,8 +37,7 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
-import org.osmdroid.tileprovider.tilesource.XYTileSource
-import org.osmdroid.views.overlay.CopyrightOverlay
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -88,23 +87,7 @@ class MapActivity : Activity() {
     private var shownNight: Boolean? = null
     private lateinit var styleButton: TextView
 
-    // Rustige kaarten van CARTO (op basis van OpenStreetMap): helder overdag, donker 's avonds.
-    private val dayTiles = XYTileSource(
-        "CartoVoyager", 0, 20, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://c.basemaps.cartocdn.com/rastertiles/voyager/"
-        ),
-        "\u00A9 OpenStreetMap-bijdragers \u00A9 CARTO"
-    )
-    private val darkTiles = XYTileSource(
-        "CartoDark", 0, 20, 256, ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/dark_all/",
-            "https://b.basemaps.cartocdn.com/dark_all/",
-            "https://c.basemaps.cartocdn.com/dark_all/"
-        ),
+
         "\u00A9 OpenStreetMap-bijdragers \u00A9 CARTO"
     )
     private var bundled = false
@@ -187,7 +170,7 @@ class MapActivity : Activity() {
 
         // Kaart.
         map = MapView(this).apply {
-            setTileSource(dayTiles)
+            setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             // Grotere kaartletters, beter leesbaar op een telefoon.
             isTilesScaledToDpi = true
@@ -198,7 +181,6 @@ class MapActivity : Activity() {
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         map.overlays.add(overlay)
-        map.overlays.add(CopyrightOverlay(this))
         root.addView(map, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val savedLat = prefs.getFloat("lat", Float.NaN)
@@ -491,7 +473,17 @@ class MapActivity : Activity() {
         overlay.night = night
         if (shownNight != night) {
             shownNight = night
-            map.setTileSource(if (night) darkTiles else dayTiles)
+            // Donkere kaart: kleuren omdraaien, iets dimmen en blauw-grijs tintje.
+            map.overlayManager.tilesOverlay.setColorFilter(
+                if (night) android.graphics.ColorMatrixColorFilter(
+                    android.graphics.ColorMatrix(floatArrayOf(
+                        -0.62f, 0f, 0f, 0f, 175f,
+                        0f, -0.66f, 0f, 0f, 185f,
+                        0f, 0f, -0.72f, 0f, 200f,
+                        0f, 0f, 0f, 1f, 0f
+                    ))
+                ) else null
+            )
         }
         map.invalidate()
     }
