@@ -255,6 +255,7 @@ class MapActivity : Activity() {
         overlay = NetOverlay(resources.displayMetrics.density)
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         overlay.onTownTap = { t -> openInMaps(t.name, t.pos) }
+        overlay.onFerryTap = { f -> ferryInfo(f) }
         overlay.onPoiTap = { list -> if (list.size == 1) poiActions(list[0]) else poiGroup(list) }
         overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
@@ -592,7 +593,9 @@ class MapActivity : Activity() {
         setStatus("Knooppunten openen\u2026")
         io.execute {
             val data = Bundled.load(this)
+            val ferries = Ferries.load(applicationContext)
             ui.post {
+                overlay.ferries = ferries
                 bundleChecked = true
                 if (data != null) {
                     bundled = true
@@ -1240,6 +1243,7 @@ class MapActivity : Activity() {
         }
         overlay.legs = legs
         buildNavigationLine()
+        overlay.routeFerries = Ferries.onRoute(overlay.ferries, navPts)
         updateSummary()
         updateMode()
         map.invalidate()
@@ -1271,6 +1275,9 @@ class MapActivity : Activity() {
         var sub = "${formatKm(meters)} · ${routeNodes.size} knooppunten · ± $minutes min"
         if (routeNodes.size >= 3) sub += "\nHoud een nummer lang ingedrukt om het over te slaan"
         if (legs.any { !it.connected }) sub += "\nLet op: stippellijn = geen verbinding gevonden"
+        val fs = overlay.routeFerries
+        subView.setOnClickListener { fs.firstOrNull()?.let { ferryInfo(it) } }
+        if (fs.isNotEmpty()) sub += "\n\u26F4 Via " + (if (fs.size == 1) "de pont " + fs[0].name else "${fs.size} ponten") + " (tik voor vaartijden)"
         subView.text = sub
     }
 
@@ -1711,6 +1718,11 @@ class MapActivity : Activity() {
                     (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
             renderNav(m.first, 0f, m.second, m.third, next.ref, nodeText, false)
             setUpcoming(k, toNext)
+            // Een pont vooruit: even melden, dan weet je dat je moet wachten.
+            for (f in overlay.routeFerries) {
+                val d = min(here.distanceToAsDouble(f.a), here.distanceToAsDouble(f.b))
+                if (d < 300.0 && spoken.add("pont" + f.name)) say("Straks de pont, " + f.name)
+            }
         }
         updateEta(remainingAll)
     }
@@ -2393,6 +2405,41 @@ class MapActivity : Activity() {
                 }
             }
         }
+    }
+
+    /** Openingstijden uit OpenStreetMap (bijv. "Mo-Fr 07:30-17:30; Sa 09:00-17:00") leesbaar maken. */
+    private fun readableHours(raw: String): String {
+        var t = raw
+        val words = listOf(
+            "Mo" to "ma", "Tu" to "di", "We" to "wo", "Th" to "do", "Fr" to "vr", "Sa" to "za", "Su" to "zo",
+            "PH" to "feestdagen", "off" to "geen afvaart", "closed" to "geen afvaart",
+            "Jan" to "jan", "Feb" to "feb", "Mar" to "mrt", "Apr" to "apr", "May" to "mei", "Jun" to "jun",
+            "Jul" to "jul", "Aug" to "aug", "Sep" to "sep", "Oct" to "okt", "Nov" to "nov", "Dec" to "dec"
+        )
+        for ((en, nl) in words) t = t.replace(Regex("\\b$en\\b"), nl)
+        return t.split(";").joinToString("\n") { it.trim() }.replace("24/7", "dag en nacht")
+    }
+
+    private fun ferryInfo(f: Ferry) {
+        val lines = ArrayList<String>()
+        lines.add(if (f.hours != null) "Vaartijden:\n" + readableHours(f.hours) else "Vaartijden staan niet in OpenStreetMap.")
+        if (f.charge != null) lines.add("Tarief: " + f.charge) else if (f.fee == "no") lines.add("Gratis") else if (f.fee == "yes") lines.add("Betaald")
+        if (f.operator != null) lines.add("Exploitant: " + f.operator)
+        lines.add("Let op: of de pont vandaag vaart (hoog- of laagwater, storm) staat hier niet. Kijk bij twijfel op de site van de pont.")
+        val acts = ArrayList<SheetAction>()
+        if (f.website != null) acts.add(SheetAction("Website", true) {
+            try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(if (f.website.startsWith("http")) f.website else "https://" + f.website))) } catch (_: Exception) {}
+        })
+        acts.add(SheetAction("Open in Maps", f.website == null) { openInMaps(f.name, f.mid) })
+        acts.add(SheetAction("Sluiten", false) {})
+        sheet("\u26F4 " + f.name, null, content = {
+            TextView(this).apply {
+                text = lines.joinToString("\n\n")
+                textSize = 15f
+                setTextColor(ink)
+                setLineSpacing(0f, 1.15f)
+            }
+        }, actions = acts)
     }
 
     /** Opent een plek in Google Maps (of een andere kaart-app). Met een naam zoekt Maps die plek op

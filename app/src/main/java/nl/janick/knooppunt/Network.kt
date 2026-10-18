@@ -719,3 +719,50 @@ object Places {
         }
     }
 }
+
+/** Een pont of veer, met wat OpenStreetMap erover weet. */
+class Ferry(val name: String, val hours: String?, val website: String?, val operator: String?, val fee: String?, val charge: String?, val a: GeoPoint, val b: GeoPoint) {
+    val mid = GeoPoint((a.latitude + b.latitude) / 2, (a.longitude + b.longitude) / 2)
+}
+
+/** Ponten die bij het bouwen in de app zijn gezet (assets/ponten.json). */
+object Ferries {
+    @Volatile private var all: List<Ferry>? = null
+    @Volatile private var tried = false
+
+    @Synchronized
+    fun load(context: Context): List<Ferry> {
+        if (tried) return all ?: emptyList()
+        tried = true
+        all = try {
+            val arr = org.json.JSONArray(context.assets.open("ponten.json").bufferedReader().use { it.readText() })
+            val out = ArrayList<Ferry>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val p = o.getJSONArray("p")
+                out.add(Ferry(
+                    o.optString("n").ifEmpty { "Pont" }, o.optString("h").ifEmpty { null }, o.optString("w").ifEmpty { null },
+                    o.optString("o").ifEmpty { null }, o.optString("f").ifEmpty { null }, o.optString("c").ifEmpty { null },
+                    GeoPoint(p.getDouble(0), p.getDouble(1)), GeoPoint(p.getDouble(2), p.getDouble(3))
+                ))
+            }
+            out
+        } catch (_: Exception) {
+            null
+        }
+        return all ?: emptyList()
+    }
+
+    /** Ponten waar de route overheen gaat: de lijn komt vlak langs beide aanlegplaatsen. */
+    fun onRoute(list: List<Ferry>, line: List<GeoPoint>): List<Ferry> {
+        if (line.size < 2 || list.isEmpty()) return emptyList()
+        val minLat = line.minOf { it.latitude } - 0.002
+        val maxLat = line.maxOf { it.latitude } + 0.002
+        val minLon = line.minOf { it.longitude } - 0.003
+        val maxLon = line.maxOf { it.longitude } + 0.003
+        return list.filter { f ->
+            f.mid.latitude in minLat..maxLat && f.mid.longitude in minLon..maxLon &&
+                line.any { it.distanceToAsDouble(f.a) < 120.0 } && line.any { it.distanceToAsDouble(f.b) < 120.0 }
+        }
+    }
+}

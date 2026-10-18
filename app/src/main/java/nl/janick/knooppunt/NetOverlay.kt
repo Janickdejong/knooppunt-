@@ -28,6 +28,13 @@ class NetOverlay(private val dens: Float) : Overlay() {
     @Volatile var passNodes: List<KNode> = emptyList()
     @Volatile var pois: List<Poi> = emptyList()
     @Volatile var towns: List<Town> = emptyList()
+    @Volatile var ferries: List<Ferry> = emptyList()
+    @Volatile var routeFerries: List<Ferry> = emptyList()
+    var onFerryTap: ((Ferry) -> Unit)? = null
+    private val ferryBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#1565C0") }
+    private val ferryText = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private fun visibleFerries(zoom: Double): List<Ferry> =
+        if (navigating) routeFerries else if (zoom >= 11.0) ferries else routeFerries
     var onPoiTap: ((List<Poi>) -> Unit)? = null
     private class PoiGroup(val x: Float, val y: Float, val items: ArrayList<Poi>)
     private var poiGroups: List<PoiGroup> = emptyList()
@@ -203,6 +210,21 @@ class NetOverlay(private val dens: Float) : Overlay() {
             }
         }
 
+        // Ponten: blauw rondje met een bootje.
+        val fr = 13f * dens
+        for (f in visibleFerries(zoom)) {
+            if (f.mid.latitude < bb.latSouth || f.mid.latitude > bb.latNorth || f.mid.longitude < bb.lonWest || f.mid.longitude > bb.lonEast) continue
+            pj.toPixels(f.mid, tmp)
+            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), fr + 2f * dens, fillWhite)
+            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), fr, ferryBg)
+            ferryText.textSize = fr * 1.1f
+            val fm3 = ferryText.fontMetrics
+            c.save()
+            c.rotate(-osmv.mapOrientation, tmp.x.toFloat(), tmp.y.toFloat())
+            c.drawText("\u26F4", tmp.x.toFloat(), tmp.y - (fm3.ascent + fm3.descent) / 2f, ferryText)
+            c.restore()
+        }
+
         for (t in towns) {
             val r = townBox(t, pj)
             if (r.right < 0 || r.bottom < 0 || r.left > osmv.width || r.top > osmv.height) continue
@@ -314,6 +336,13 @@ class NetOverlay(private val dens: Float) : Overlay() {
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val pj = mapView.projection
         val tp = tapPoint(e, mapView)
+        for (f in visibleFerries(mapView.zoomLevelDouble)) {
+            pj.toPixels(f.mid, tmp)
+            if (Math.hypot((tmp.x - tp.x).toDouble(), (tmp.y - tp.y).toDouble()) < 24f * dens) {
+                onFerryTap?.invoke(f)
+                return true
+            }
+        }
         for (g in poiGroups) {
             if (Math.hypot((g.x - tp.x).toDouble(), (g.y - tp.y).toDouble()) < 24f * dens) {
                 onPoiTap?.invoke(g.items)

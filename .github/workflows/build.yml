@@ -27,10 +27,14 @@ jobs:
           osmium tags-filter nl.osm.pbf r/network=rcn n/rcn_ref -o nl.filtered.pbf --overwrite
           # Plaatsnamen (stad, dorp, gehucht) voor "Onderweg verkennen", zonder internet te gebruiken.
           osmium tags-filter nl.osm.pbf n/place=city,town,village,hamlet -o nl.places.pbf --overwrite || true
+          # Ponten en veren.
+          osmium tags-filter nl.osm.pbf w/route=ferry -o nl.ferries.pbf --overwrite || true
           rm -f nl.osm.pbf
           FILES="nl.filtered.pbf"
           PLACES=""
           [ -f nl.places.pbf ] && PLACES="nl.places.pbf"
+          FERRIES=""
+          [ -f nl.ferries.pbf ] && FERRIES="nl.ferries.pbf"
           # Aangrenzende gebieden: Vlaanderen/België en de Duitse grensdeelstaten. Mislukt er een, dan gaat het zonder verder.
           for gebied in europe/belgium europe/germany/nordrhein-westfalen europe/germany/niedersachsen; do
             naam=$(basename "$gebied")
@@ -38,6 +42,7 @@ jobs:
               && osmium tags-filter "$naam.osm.pbf" r/network=rcn n/rcn_ref -o "$naam.filtered.pbf" --overwrite; then
               FILES="$FILES $naam.filtered.pbf"
               osmium tags-filter "$naam.osm.pbf" n/place=city,town,village,hamlet -o "$naam.places.pbf" --overwrite && PLACES="$PLACES $naam.places.pbf"
+              osmium tags-filter "$naam.osm.pbf" w/route=ferry -o "$naam.ferries.pbf" --overwrite && FERRIES="$FERRIES $naam.ferries.pbf"
             else
               echo "Overgeslagen: $naam"
             fi
@@ -48,6 +53,9 @@ jobs:
           python3 tools/build_data.py gefilterd.osm app/src/main/assets/knooppunten.json
           if [ -n "$PLACES" ]; then
             osmium merge $PLACES -o plaatsen.osm --overwrite && python3 tools/build_places.py plaatsen.osm app/src/main/assets/plaatsen.json || echo "Plaatsnamen overgeslagen"
+          fi
+          if [ -n "$FERRIES" ]; then
+            osmium merge $FERRIES -o ponten.osm --overwrite && python3 tools/build_ferries.py ponten.osm app/src/main/assets/ponten.json || echo "Ponten overgeslagen"
           fi
           ls -la app/src/main/assets
 
