@@ -101,7 +101,6 @@ class MapActivity : Activity() {
     private val stops = HashMap<Long, KNode>()
     private val stopNames = HashMap<Long, String>()
     private val stopLegs = HashMap<String, Leg>()
-    private val stopFetching = HashSet<String>()
     private var nextStopId = -1000L
     private var legs: List<Leg> = emptyList()
     private var routeNodes: List<KNode> = emptyList()
@@ -1234,28 +1233,30 @@ class MapActivity : Activity() {
     /** "knooppunt 35" of de naam van een tussenstop. */
     private fun label(n: KNode): String = stopNames[n.id] ?: "knooppunt ${n.ref}"
 
-    /** Stuk route van of naar een tussenstop: via de fietsrouteplanner, eenmalig opgehaald en bewaard. */
-    private fun stopLeg(a: KNode, b: KNode): Leg {
-        val key = "${a.id}>${b.id}"
-        stopLegs[key]?.let { return it }
-        if (stopFetching.add(key)) {
-            io.execute {
-                val pts = Router.route(a.pos, b.pos)
-                ui.post {
-                    stopFetching.remove(key)
-                    if (pts != null) {
-                        var len = 0.0
-                        for (i in 1 until pts.size) len += pts[i - 1].distanceToAsDouble(pts[i])
-                        stopLegs[key] = Leg(listOf(a.pos) + pts + b.pos, len + a.pos.distanceToAsDouble(pts.first()) + pts.last().distanceToAsDouble(b.pos), true)
-                        if (!navigating) rebuildRoute()
-                    } else {
-                        Toast.makeText(this, "Route naar de tussenstop kon niet worden berekend. Heb je internet?", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
+    /** Stuk route van of naar een tussenstop, zonder internet: de knooppuntroute tussen de knooppunten
+     *  ervoor en erna, met een kort zijpaadje naar de stop vanaf het dichtstbijzijnde punt. */
+    private fun stopLeg(net: Network, found: List<KNode>, i: Int): Leg {
+        val a = found[i]
+        val b = found[i + 1]
+        val stop = if (b.id < 0) b else a
+        val si = if (b.id < 0) i + 1 else i
+        val prev = found.getOrNull(si - 1)
+        val next = found.getOrNull(si + 1)
+        if (prev == null || next == null || prev.id < 0 || next.id < 0) {
+            return Leg(listOf(a.pos, b.pos), a.pos.distanceToAsDouble(b.pos), true)
         }
-        // Zolang hij nog berekend wordt: een stippellijn.
-        return Leg(listOf(a.pos, b.pos), a.pos.distanceToAsDouble(b.pos), false)
+        val key = "${prev.id}>${stop.id}>${next.id}"
+        val base = stopLegs[key] ?: net.leg(prev, next).also { stopLegs[key] = it }
+        var j = 0
+        var bd = Double.MAX_VALUE
+        for ((k, p) in base.pts.withIndex()) {
+            val d = p.distanceToAsDouble(stop.pos)
+            if (d < bd) { bd = d; j = k }
+        }
+        val pts = if (b.id < 0) base.pts.subList(0, j + 1) + stop.pos else listOf(stop.pos) + base.pts.subList(j, base.pts.size)
+        var len = 0.0
+        for (k in 1 until pts.size) len += pts[k - 1].distanceToAsDouble(pts[k])
+        return Leg(pts, len, base.connected)
     }
 
     /** Een café of restaurant als tussenstop in de route zetten, op de plek met de kleinste omweg. */
@@ -1305,7 +1306,7 @@ class MapActivity : Activity() {
             val raw = (0 until max(0, found.size - 1)).map {
                 val a = found[it]
                 val b = found[it + 1]
-                if (a.id < 0 || b.id < 0) stopLeg(a, b) else net.leg(a, b)
+                if (a.id < 0 || b.id < 0) stopLeg(net, found, it) else net.leg(a, b)
             }
             // Sluit de stukken op elkaar aan, ook als een knooppunt uit twee bordjes bestaat.
             legs = raw.mapIndexed { i, l ->
@@ -1460,10 +1461,6 @@ class MapActivity : Activity() {
 
     private fun startNavigation() {
         if (legs.isEmpty() || navPts.size < 2) return
-        if (stopFetching.isNotEmpty()) {
-            Toast.makeText(this, "De route naar je tussenstop wordt nog berekend, even geduld", Toast.LENGTH_SHORT).show()
-            return
-        }
         if (me == null) {
             Toast.makeText(this, "Wacht even tot je locatie is gevonden", Toast.LENGTH_SHORT).show()
             startLocation()
@@ -2426,7 +2423,10 @@ class MapActivity : Activity() {
         }
         setStatus("Pauzeplekken zoeken\u2026")
         io.execute {
-            val list = try { Overpass.pois(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
+            // Eerst de plekken in de app zelf (werkt altijd, ook zonder internet); anders online zoeken.
+            val bundledPois = PoiData.load(applicationContext)
+            val list = if (bundledPois != null) PoiData.near(bundledPois, line)
+                else try { Overpass.pois(line) } catch (e: Exception) { Overpass.lastError = e.javaClass.simpleName; null }
             // Hoever langs de route ligt elke plek (dichtstbijzijnde routepunt, in km vanaf het begin).
             val cum = DoubleArray(line.size)
             for (i in 1 until line.size) cum[i] = cum[i - 1] + line[i - 1].distanceToAsDouble(line[i])

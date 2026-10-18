@@ -29,12 +29,16 @@ jobs:
           osmium tags-filter nl.osm.pbf n/place=city,town,village,hamlet -o nl.places.pbf --overwrite || true
           # Ponten en veren.
           osmium tags-filter nl.osm.pbf w/route=ferry -o nl.ferries.pbf --overwrite || true
+          # Cafés, restaurants en toiletten voor "Pauzeplekken".
+          osmium tags-filter nl.osm.pbf nw/amenity=cafe,restaurant,toilets,fast_food,pub,ice_cream -o nl.pois.pbf --overwrite || true
           rm -f nl.osm.pbf
           FILES="nl.filtered.pbf"
           PLACES=""
           [ -f nl.places.pbf ] && PLACES="nl.places.pbf"
           FERRIES=""
           [ -f nl.ferries.pbf ] && FERRIES="nl.ferries.pbf"
+          POIS=""
+          [ -f nl.pois.pbf ] && POIS="nl.pois.pbf"
           # Aangrenzende gebieden: Vlaanderen/België en de Duitse grensdeelstaten. Mislukt er een, dan gaat het zonder verder.
           for gebied in europe/belgium europe/germany/nordrhein-westfalen europe/germany/niedersachsen; do
             naam=$(basename "$gebied")
@@ -43,6 +47,7 @@ jobs:
               FILES="$FILES $naam.filtered.pbf"
               osmium tags-filter "$naam.osm.pbf" n/place=city,town,village,hamlet -o "$naam.places.pbf" --overwrite && PLACES="$PLACES $naam.places.pbf"
               osmium tags-filter "$naam.osm.pbf" w/route=ferry -o "$naam.ferries.pbf" --overwrite && FERRIES="$FERRIES $naam.ferries.pbf"
+              osmium tags-filter "$naam.osm.pbf" nw/amenity=cafe,restaurant,toilets,fast_food,pub,ice_cream -o "$naam.pois.pbf" --overwrite && POIS="$POIS $naam.pois.pbf"
             else
               echo "Overgeslagen: $naam"
             fi
@@ -56,6 +61,9 @@ jobs:
           fi
           if [ -n "$FERRIES" ]; then
             osmium merge $FERRIES -o ponten.osm --overwrite && python3 tools/build_ferries.py ponten.osm app/src/main/assets/ponten.json || echo "Ponten overgeslagen"
+          fi
+          if [ -n "$POIS" ]; then
+            osmium merge $POIS -o pauze.osm --overwrite && python3 tools/build_pois.py pauze.osm app/src/main/assets/pauze.json || echo "Pauzeplekken overgeslagen"
           fi
           ls -la app/src/main/assets
 

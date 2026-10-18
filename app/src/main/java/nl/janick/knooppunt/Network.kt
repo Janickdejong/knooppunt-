@@ -766,3 +766,63 @@ object Ferries {
         }
     }
 }
+
+/** Cafés, restaurants en toiletten die bij het bouwen in de app zijn gezet (assets/pauze.json). */
+object PoiData {
+    @Volatile private var all: List<Poi>? = null
+    @Volatile private var tried = false
+
+    @Synchronized
+    fun load(context: Context): List<Poi>? {
+        if (tried) return all
+        tried = true
+        all = try {
+            val arr = org.json.JSONArray(context.assets.open("pauze.json").bufferedReader().use { it.readText() })
+            val kinds = mapOf("c" to "cafe", "r" to "restaurant", "t" to "toilets", "f" to "fast_food", "p" to "pub", "i" to "ice_cream")
+            val out = ArrayList<Poi>(arr.length())
+            for (i in 0 until arr.length()) {
+                val a = arr.getJSONArray(i)
+                val kind = kinds[a.getString(1)] ?: continue
+                out.add(Poi(a.getString(0).ifEmpty { "Toilet" }, kind, GeoPoint(a.getInt(2) / 1e5, a.getInt(3) / 1e5)))
+            }
+            out
+        } catch (_: Exception) {
+            null
+        }
+        return all
+    }
+
+    private fun segDist(p: GeoPoint, a: GeoPoint, b: GeoPoint): Double {
+        val mx = 111320.0 * Math.cos(Math.toRadians(p.latitude))
+        val my = 110540.0
+        val ax = (a.longitude - p.longitude) * mx
+        val ay = (a.latitude - p.latitude) * my
+        val dx = (b.longitude - p.longitude) * mx - ax
+        val dy = (b.latitude - p.latitude) * my - ay
+        val l2 = dx * dx + dy * dy
+        val t = if (l2 < 1e-9) 0.0 else (-(ax * dx + ay * dy) / l2).coerceIn(0.0, 1.0)
+        return Math.hypot(ax + t * dx, ay + t * dy)
+    }
+
+    /** Plekken tot `radius` meter van de lijn. */
+    fun near(list: List<Poi>, line: List<GeoPoint>, radius: Double = 150.0): List<Poi> {
+        if (line.size < 2) return emptyList()
+        val pad = radius / 111000.0 * 1.3
+        val minLat = line.minOf { it.latitude } - pad
+        val maxLat = line.maxOf { it.latitude } + pad
+        val minLon = line.minOf { it.longitude } - pad * 1.7
+        val maxLon = line.maxOf { it.longitude } + pad * 1.7
+        return list.filter { p ->
+            val la = p.pos.latitude
+            val lo = p.pos.longitude
+            if (la !in minLat..maxLat || lo !in minLon..maxLon) return@filter false
+            for (j in 1 until line.size) {
+                val a = line[j - 1]
+                // Snel overslaan als het stukje ver weg ligt.
+                if (Math.abs(a.latitude - la) > 0.02 && Math.abs(line[j].latitude - la) > 0.02) continue
+                if (segDist(p.pos, a, line[j]) < radius) return@filter true
+            }
+            false
+        }
+    }
+}
