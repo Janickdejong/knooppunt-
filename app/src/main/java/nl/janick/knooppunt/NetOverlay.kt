@@ -29,6 +29,8 @@ class NetOverlay(private val dens: Float) : Overlay() {
     @Volatile var pois: List<Poi> = emptyList()
     @Volatile var towns: List<Town> = emptyList()
     @Volatile var ferries: List<Ferry> = emptyList()
+    @Volatile var stops: List<KNode> = emptyList()
+    var onStopTap: ((KNode) -> Unit)? = null
     @Volatile var routeFerries: List<Ferry> = emptyList()
     var onFerryTap: ((Ferry) -> Unit)? = null
     private val ferryBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.parseColor("#1565C0") }
@@ -276,6 +278,20 @@ class NetOverlay(private val dens: Float) : Overlay() {
         }
         poiGroups = groups
 
+        // Tussenstops in de route (bijv. een restaurant): groen omrand, iets groter.
+        for (st in stops) {
+            pj.toPixels(st.pos, tmp)
+            val sr = 15f * dens
+            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), sr + 3f * dens, ring.apply { color = green; strokeWidth = 3f * dens })
+            c.drawCircle(tmp.x.toFloat(), tmp.y.toFloat(), sr, fillWhite)
+            poiText.textSize = sr * 1.0f
+            val fm4 = poiText.fontMetrics
+            c.save()
+            c.rotate(-osmv.mapOrientation, tmp.x.toFloat(), tmp.y.toFloat())
+            c.drawText(st.ref, tmp.x.toFloat(), tmp.y - (fm4.ascent + fm4.descent) / 2f, poiText)
+            c.restore()
+        }
+
         val m = me
         if (m != null) {
             pj.toPixels(m, tmp)
@@ -336,6 +352,13 @@ class NetOverlay(private val dens: Float) : Overlay() {
     override fun onSingleTapConfirmed(e: MotionEvent, mapView: MapView): Boolean {
         val pj = mapView.projection
         val tp = tapPoint(e, mapView)
+        for (st in stops) {
+            pj.toPixels(st.pos, tmp)
+            if (Math.hypot((tmp.x - tp.x).toDouble(), (tmp.y - tp.y).toDouble()) < 26f * dens) {
+                onStopTap?.invoke(st)
+                return true
+            }
+        }
         for (f in visibleFerries(mapView.zoomLevelDouble)) {
             pj.toPixels(f.mid, tmp)
             if (Math.hypot((tmp.x - tp.x).toDouble(), (tmp.y - tp.y).toDouble()) < 24f * dens) {

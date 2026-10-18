@@ -97,6 +97,12 @@ class MapActivity : Activity() {
 
     // Route.
     private val routeIds = ArrayList<Long>()
+    // Tussenstops die geen knooppunt zijn (bijv. een restaurant), met een negatief id.
+    private val stops = HashMap<Long, KNode>()
+    private val stopNames = HashMap<Long, String>()
+    private val stopLegs = HashMap<String, Leg>()
+    private val stopFetching = HashSet<String>()
+    private var nextStopId = -1000L
     private var legs: List<Leg> = emptyList()
     private var routeNodes: List<KNode> = emptyList()
 
@@ -256,6 +262,7 @@ class MapActivity : Activity() {
         overlay.onNodeTap = { node -> onNodeTapped(node) }
         overlay.onTownTap = { t -> openInMaps(t.name, t.pos) }
         overlay.onFerryTap = { f -> ferryInfo(f) }
+        overlay.onStopTap = { n -> poiActions(Poi(stopNames[n.id] ?: "Tussenstop", "cafe", n.pos)) }
         overlay.onPoiTap = { list -> if (list.size == 1) poiActions(list[0]) else poiGroup(list) }
         overlay.onNodeLong = { node -> onNodeLongPressed(node) }
         overlay.onUserMove = { if (navigating) freeUntil = System.currentTimeMillis() + 10000L }
@@ -1224,6 +1231,68 @@ class MapActivity : Activity() {
         rebuildRoute()
     }
 
+    /** "knooppunt 35" of de naam van een tussenstop. */
+    private fun label(n: KNode): String = stopNames[n.id] ?: "knooppunt ${n.ref}"
+
+    /** Stuk route van of naar een tussenstop: via de fietsrouteplanner, eenmalig opgehaald en bewaard. */
+    private fun stopLeg(a: KNode, b: KNode): Leg {
+        val key = "${a.id}>${b.id}"
+        stopLegs[key]?.let { return it }
+        if (stopFetching.add(key)) {
+            io.execute {
+                val pts = Router.route(a.pos, b.pos)
+                ui.post {
+                    stopFetching.remove(key)
+                    if (pts != null) {
+                        var len = 0.0
+                        for (i in 1 until pts.size) len += pts[i - 1].distanceToAsDouble(pts[i])
+                        stopLegs[key] = Leg(listOf(a.pos) + pts + b.pos, len + a.pos.distanceToAsDouble(pts.first()) + pts.last().distanceToAsDouble(b.pos), true)
+                        if (!navigating) rebuildRoute()
+                    } else {
+                        Toast.makeText(this, "Route naar de tussenstop kon niet worden berekend. Heb je internet?", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+        // Zolang hij nog berekend wordt: een stippellijn.
+        return Leg(listOf(a.pos, b.pos), a.pos.distanceToAsDouble(b.pos), false)
+    }
+
+    /** Een café of restaurant als tussenstop in de route zetten, op de plek met de kleinste omweg. */
+    private fun addStop(p: Poi) {
+        if (navigating || trip != null) {
+            Toast.makeText(this, "Stop eerst de navigatie om de route aan te passen", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val id = nextStopId--
+        val node = KNode(id, p.letter, p.pos)
+        stops[id] = node
+        stopNames[id] = p.name
+        val nodes = routeNodes
+        var at = routeIds.size
+        if (nodes.size >= 2) {
+            var best = Double.MAX_VALUE
+            for (i in 0 until nodes.size - 1) {
+                val a = nodes[i].pos
+                val b = nodes[i + 1].pos
+                val detour = a.distanceToAsDouble(p.pos) + p.pos.distanceToAsDouble(b) - a.distanceToAsDouble(b)
+                if (detour < best) {
+                    best = detour
+                    at = i + 1
+                }
+            }
+        }
+        routeIds.add(at.coerceIn(0, routeIds.size), id)
+        rebuildRoute()
+        Toast.makeText(this, p.name + " staat nu in je route", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun removeStop(id: Long) {
+        if (navigating) return
+        routeIds.removeAll { it == id }
+        rebuildRoute()
+    }
+
     private fun rebuildRoute() {
         val net = overlay.net
         overlay.routeIds = routeIds.toSet()
@@ -1231,9 +1300,13 @@ class MapActivity : Activity() {
             legs = emptyList()
             routeNodes = emptyList()
         } else {
-            val found = routeIds.mapNotNull { net.nodes[it] }
+            val found = routeIds.mapNotNull { net.nodes[it] ?: stops[it] }
             routeNodes = found
-            val raw = (0 until max(0, found.size - 1)).map { net.leg(found[it], found[it + 1]) }
+            val raw = (0 until max(0, found.size - 1)).map {
+                val a = found[it]
+                val b = found[it + 1]
+                if (a.id < 0 || b.id < 0) stopLeg(a, b) else net.leg(a, b)
+            }
             // Sluit de stukken op elkaar aan, ook als een knooppunt uit twee bordjes bestaat.
             legs = raw.mapIndexed { i, l ->
                 val prev = if (i > 0) raw[i - 1].pts.last() else null
@@ -1242,6 +1315,7 @@ class MapActivity : Activity() {
             }
         }
         overlay.legs = legs
+        overlay.stops = routeNodes.filter { it.id < 0 && stops.containsKey(it.id) }
         buildNavigationLine()
         overlay.routeFerries = Ferries.onRoute(overlay.ferries, navPts)
         updateSummary()
@@ -1386,6 +1460,10 @@ class MapActivity : Activity() {
 
     private fun startNavigation() {
         if (legs.isEmpty() || navPts.size < 2) return
+        if (stopFetching.isNotEmpty()) {
+            Toast.makeText(this, "De route naar je tussenstop wordt nog berekend, even geduld", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (me == null) {
             Toast.makeText(this, "Wacht even tot je locatie is gevonden", Toast.LENGTH_SHORT).show()
             startLocation()
@@ -1524,7 +1602,7 @@ class MapActivity : Activity() {
         wasOffRoute = false
         clearGuide()
         guideFailed = false
-        say("Knooppunt ${skipped.ref} overgeslagen. Volgende knooppunt ${routeNodes.firstOrNull()?.ref ?: ""}")
+        say(label(skipped).replaceFirstChar { it.uppercase() } + " overgeslagen. Volgende: " + (routeNodes.firstOrNull()?.let { label(it) } ?: ""))
         updateNavigation(here)
         followMe(here)
     }
@@ -1653,7 +1731,7 @@ class MapActivity : Activity() {
                 val tr = trip
                 if (tr != null) {
                     if (k >= routeNodes.size) say("Je bent aangekomen bij ${tr.name}")
-                } else if (k < routeNodes.size) say("Knooppunt $reached. Volgende knooppunt ${routeNodes[k].ref}") else say("Je bent aangekomen bij knooppunt $reached")
+                } else if (k < routeNodes.size) say(label(routeNodes[navNext]).replaceFirstChar { it.uppercase() } + ". Volgende: " + label(routeNodes[k])) else say("Je bent aangekomen bij " + label(routeNodes[navNext]))
             }
             navNext = k
         }
@@ -1690,7 +1768,7 @@ class MapActivity : Activity() {
             ensureGuide(here, fetchGoal)
             val g = guide
             overlay.nextId = goalNode.id
-            val what = if (joinNearest) "Dichtstbijzijnde punt van de route" else if (toStart && skipBackup != null) "Naar knooppunt ${goalNode.ref}" else if (toStart) "Startpunt" else "Terug naar de route"
+            val what = if (joinNearest) "Dichtstbijzijnde punt van de route" else if (toStart && skipBackup != null) "Naar " + label(goalNode) else if (toStart) "Startpunt" else "Terug naar de route"
             if (g != null) {
                 val left = g.remaining() + g.locate(here)
                 val m = guidance(g, "g", left, if (toStart && skipBackup != null) "Rechtdoor" else if (toStart) "Rechtdoor naar het startpunt" else "Rechtdoor terug naar de route")
@@ -1714,7 +1792,7 @@ class MapActivity : Activity() {
             mainTrack?.progress = navProgress
             val m = guidance(mainTrack, "m", toNext, "Rechtdoor")
             val nodeText = if (trip != null) "${formatDistance(toNext)} naar ${trip?.name}" else
-                "${formatDistance(toNext)} naar knooppunt ${next.ref}" +
+                "${formatDistance(toNext)} naar " + label(next) +
                     (if (afterNext != null) " \u00B7 daarna $afterNext" else "")
             renderNav(m.first, 0f, m.second, m.third, next.ref, nodeText, false)
             setUpcoming(k, toNext)
@@ -1817,6 +1895,11 @@ class MapActivity : Activity() {
                 obj.put("refs", JSONArray(routeNodes.map { it.ref }))
                 obj.put("meters", totalLength())
                 obj.put("pts", routeShape())
+                val st = JSONArray()
+                for (n in routeNodes) if (n.id < 0 && stops.containsKey(n.id)) {
+                    st.put(JSONObject().put("id", n.id).put("ref", n.ref).put("name", stopNames[n.id] ?: "").put("lat", n.pos.latitude).put("lon", n.pos.longitude))
+                }
+                obj.put("stops", st)
                 list.put(obj)
                 prefs.edit().putString("routes", list.toString()).apply()
                 Toast.makeText(this, "Route opgeslagen", Toast.LENGTH_SHORT).show()
@@ -1935,6 +2018,15 @@ class MapActivity : Activity() {
 
     private fun loadRoute(obj: JSONObject) {
         val ids = obj.optJSONArray("ids") ?: return
+        obj.optJSONArray("stops")?.let { st ->
+            for (i in 0 until st.length()) {
+                val o = st.getJSONObject(i)
+                val id = o.getLong("id")
+                stops[id] = KNode(id, o.optString("ref", "\u2615"), GeoPoint(o.getDouble("lat"), o.getDouble("lon")))
+                stopNames[id] = o.optString("name")
+                if (id <= nextStopId) nextStopId = id - 1
+            }
+        }
         routeIds.clear()
         for (i in 0 until ids.length()) routeIds.add(ids.getLong(i))
         val here = GeoPoint(obj.optDouble("lat"), obj.optDouble("lon"))
@@ -2458,6 +2550,11 @@ class MapActivity : Activity() {
     private fun poiActions(p: Poi) {
         sheet(p.name, p.label, actions = listOf(
             SheetAction("Open in Maps", true) { openInMaps(p.name, p.pos, search = !(p.kind == "toilets" && p.name == "Toilet")) },
+            run {
+                val inRoute = routeIds.firstOrNull { id -> stops[id]?.let { it.pos.distanceToAsDouble(p.pos) < 1.0 } == true }
+                if (inRoute != null) SheetAction("Uit route halen", false) { removeStop(inRoute) }
+                else SheetAction("Toevoegen aan route", false) { addStop(p) }
+            },
             SheetAction("Fietsen hierheen", false) { bikeTo(Place(p.name, "", p.pos.latitude, p.pos.longitude)) },
             SheetAction("Sluiten", false) {}
         ))
