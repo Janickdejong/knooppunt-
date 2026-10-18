@@ -2395,12 +2395,14 @@ class MapActivity : Activity() {
         }
     }
 
-    /** Opent een plek in Google Maps (of een andere kaart-app). */
-    private fun openInMaps(name: String, pos: GeoPoint) {
+    /** Opent een plek in Google Maps (of een andere kaart-app). Met een naam zoekt Maps die plek op
+     *  rond de coördinaten, zodat je de pagina met foto's, openingstijden en reviews krijgt. */
+    private fun openInMaps(name: String, pos: GeoPoint, search: Boolean = true) {
         val q = android.net.Uri.encode(name)
-        val geo = android.net.Uri.parse("geo:${pos.latitude},${pos.longitude}?q=${pos.latitude},${pos.longitude}($q)")
+        val uri = if (search) "geo:${pos.latitude},${pos.longitude}?q=$q"
+            else "geo:${pos.latitude},${pos.longitude}?q=${pos.latitude},${pos.longitude}($q)"
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, geo))
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri)))
         } catch (_: Exception) {
             Toast.makeText(this, "Geen kaart-app gevonden", Toast.LENGTH_SHORT).show()
         }
@@ -2408,7 +2410,7 @@ class MapActivity : Activity() {
 
     private fun poiActions(p: Poi) {
         sheet(p.name, p.label, actions = listOf(
-            SheetAction("Open in Maps", true) { openInMaps(p.name, p.pos) },
+            SheetAction("Open in Maps", true) { openInMaps(p.name, p.pos, search = !(p.kind == "toilets" && p.name == "Toilet")) },
             SheetAction("Fietsen hierheen", false) { bikeTo(Place(p.name, "", p.pos.latitude, p.pos.longitude)) },
             SheetAction("Sluiten", false) {}
         ))
