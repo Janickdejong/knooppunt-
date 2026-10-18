@@ -600,6 +600,7 @@ class MapActivity : Activity() {
         io.execute {
             val data = Bundled.load(this)
             val ferries = Ferries.load(applicationContext)
+            Places.load(applicationContext)
             ui.post {
                 overlay.ferries = ferries
                 bundleChecked = true
@@ -2534,10 +2535,26 @@ class MapActivity : Activity() {
         }, actions = acts)
     }
 
+    /** De dichtstbijzijnde stad of het dichtstbijzijnde dorp (geen gehucht), binnen 6 km. */
+    private fun nearestTown(pos: GeoPoint): String? {
+        val list = Places.load(applicationContext) ?: return null
+        var best: Town? = null
+        var bd = 6000.0
+        for (t in list) {
+            if (t.type == "hamlet") continue
+            if (Math.abs(t.pos.latitude - pos.latitude) > 0.06 || Math.abs(t.pos.longitude - pos.longitude) > 0.1) continue
+            val d = t.pos.distanceToAsDouble(pos)
+            if (d < bd) { bd = d; best = t }
+        }
+        return best?.name
+    }
+
     /** Opent een plek in Google Maps (of een andere kaart-app). Met een naam zoekt Maps die plek op
      *  rond de coördinaten, zodat je de pagina met foto's, openingstijden en reviews krijgt. */
     private fun openInMaps(name: String, pos: GeoPoint, search: Boolean = true) {
-        val q = android.net.Uri.encode(name)
+        // Met de plaatsnaam erbij ("Theehuus, Doesburg") vindt Maps de juiste zaak in plaats van alle zaken met die naam.
+        val town = if (search) nearestTown(pos)?.takeIf { !name.contains(it, ignoreCase = true) } else null
+        val q = android.net.Uri.encode(if (town != null) "$name, $town" else name)
         val uri = if (search) "geo:${pos.latitude},${pos.longitude}?q=$q"
             else "geo:${pos.latitude},${pos.longitude}?q=${pos.latitude},${pos.longitude}($q)"
         try {
