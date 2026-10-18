@@ -2306,11 +2306,11 @@ class MapActivity : Activity() {
                 val thumb: View? = if (it.thumb.size >= 4) RouteThumb(this, it.thumb).apply { layoutParams = LinearLayout.LayoutParams(dp(64), dp(64)) } else null
                 val row = listRow(
                     date.format(Date(it.start)),
-                    formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + (if (it.total > it.moving + 120000L) " (totaal " + formatDuration(it.total) + ")" else "") + " \u00B7 gem. " + kmh(avg) + " km/u",
+                    (if (it.name.isNotEmpty()) it.name + "\n" else "") + formatKm(it.distance) + " \u00B7 " + formatDuration(it.moving) + (if (it.total > it.moving + 120000L) " (totaal " + formatDuration(it.total) + ")" else "") + " \u00B7 gem. " + kmh(avg) + " km/u",
                     thumb
                 ) {
                     d.dismiss()
-                    rideActions(it)
+                    rideDetail(it)
                 }
                 c.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
             }
@@ -2318,25 +2318,141 @@ class MapActivity : Activity() {
         }, actions = listOf(SheetAction("Sluiten", false) {}))
     }
 
-    private fun rideActions(r: RideInfo) {
-        sheet(r.name, actions = listOf(
-            SheetAction("Als GPX bewaren", true) {
-                pendingGpx = try {
-                    Rides.gpx(r.file)
-                } catch (_: Exception) {
-                    null
+    /** Overzicht van een gefietste rit: kaartje, tijden, snelheid, knooppunten en plaatsen onderweg. */
+    private fun rideDetail(r: RideInfo) {
+        setStatus("Rit openen\u2026")
+        io.execute {
+            val pts = ArrayList<GeoPoint>()
+            val times = ArrayList<Long>()
+            var total = r.total
+            try {
+                val o = JSONObject(r.file.readText())
+                val arr = o.optJSONArray("pts") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    val p = arr.getJSONArray(i)
+                    pts.add(GeoPoint(p.getDouble(0), p.getDouble(1)))
+                    times.add(p.optLong(2))
                 }
-                if (pendingGpx == null) {
-                    Toast.makeText(this, "Deze rit kon niet worden gelezen", Toast.LENGTH_SHORT).show()
-                } else {
-                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "application/octet-stream"
-                        putExtra(Intent.EXTRA_TITLE, "rit-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date(r.start)) + ".gpx")
+                if (total <= 0 && times.size >= 2) total = times.last() - times.first()
+            } catch (_: Exception) {
+            }
+            // Knooppunten waar je langs bent gekomen, in volgorde.
+            val passed = ArrayList<String>()
+            val net = overlay.net
+            if (net != null && pts.size >= 2) {
+                val minLat = pts.minOf { it.latitude } - 0.001
+                val maxLat = pts.maxOf { it.latitude } + 0.001
+                val minLon = pts.minOf { it.longitude } - 0.0015
+                val maxLon = pts.maxOf { it.longitude } + 0.0015
+                val hits = ArrayList<Pair<Int, String>>()
+                for (n in net.nodes.values) {
+                    val la = n.pos.latitude
+                    val lo = n.pos.longitude
+                    if (la < minLat || la > maxLat || lo < minLon || lo > maxLon) continue
+                    var bi = -1
+                    var bd = 35.0
+                    for ((i, p) in pts.withIndex()) {
+                        val d = p.distanceToAsDouble(n.pos)
+                        if (d < bd) { bd = d; bi = i }
                     }
-                    startActivityForResult(intent, REQ_GPX)
+                    if (bi >= 0) hits.add(bi to n.ref)
                 }
-            },
+                for ((_, ref) in hits.sortedBy { it.first }) if (passed.lastOrNull() != ref) passed.add(ref)
+            }
+            // Plaatsen onderweg (geen gehuchten), in volgorde.
+            val towns = ArrayList<String>()
+            Places.load(applicationContext)?.let { all ->
+                if (pts.size >= 2) {
+                    val near = Places.near(all.filter { it.type != "hamlet" }, pts, 800.0)
+                    val ordered = near.map { t -> pts.indices.minByOrNull { pts[it].distanceToAsDouble(t.pos) }!! to t.name }.sortedBy { it.first }
+                    for ((_, n) in ordered) if (!towns.contains(n)) towns.add(n)
+                }
+            }
+            ui.post {
+                setStatus("")
+                showRide(r, pts, times, total, passed, towns)
+            }
+        }
+    }
+
+    private fun showRide(r: RideInfo, pts: List<GeoPoint>, times: List<Long>, total: Long, passed: List<String>, towns: List<String>) {
+        val clock = SimpleDateFormat("HH:mm", Locale("nl", "NL"))
+        val day = SimpleDateFormat("EEEE d MMMM yyyy", Locale("nl", "NL"))
+        val endTime = if (times.isNotEmpty() && times.last() > 0) times.last() else r.start + total
+        var preview: MapView? = null
+        val d = sheet(r.name.ifEmpty { "Rit" }, day.format(Date(r.start)) + " \u00B7 " + clock.format(Date(r.start)) + " \u2013 " + clock.format(Date(endTime)), content = {
+            val c = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            if (pts.size >= 2) {
+                // Kaartje met de gefietste lijn.
+                val mv = MapView(this).apply {
+                    setTileSource(TileSourceFactory.MAPNIK)
+                    isTilesScaledToDpi = true
+                    zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                    setMultiTouchControls(false)
+                    setOnTouchListener { _, _ -> true }
+                }
+                val line = org.osmdroid.views.overlay.Polyline(mv).apply {
+                    setPoints(pts)
+                    outlinePaint.color = Color.parseColor("#F08A24")
+                    outlinePaint.strokeWidth = 6f * resources.displayMetrics.density
+                    outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                }
+                mv.overlays.add(line)
+                mv.overlays.add(object : org.osmdroid.views.overlay.Overlay() {
+                    override fun draw(cv: android.graphics.Canvas, v: MapView, shadow: Boolean) {
+                        if (shadow) return
+                        val pt = android.graphics.Point()
+                        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                        val dn = resources.displayMetrics.density
+                        for ((p, col) in listOf(pts.first() to accent, pts.last() to ink)) {
+                            v.projection.toPixels(p, pt)
+                            paint.color = Color.WHITE
+                            cv.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 8f * dn, paint)
+                            paint.color = col
+                            cv.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 6f * dn, paint)
+                        }
+                    }
+                })
+                val box = BoundingBox.fromGeoPoints(pts)
+                mv.addOnFirstLayoutListener { _, _, _, _, _ -> mv.zoomToBoundingBox(box.increaseByScale(1.25f), false) }
+                preview = mv
+                val frame = FrameLayout(this).apply {
+                    background = rounded(paper, 16)
+                    clipToOutline = true
+                    addView(mv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                }
+                c.addView(frame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220)).apply { bottomMargin = dp(10) })
+            }
+            val avg = if (r.moving > 0) r.distance / (r.moving / 1000.0) else 0.0
+            val standing = (total - r.moving).coerceAtLeast(0L)
+            fun row(items: List<Pair<String, String>>) {
+                val h = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                for ((i, it) in items.withIndex()) {
+                    h.addView(statBlock(it.first, it.second), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) leftMargin = dp(8) })
+                }
+                c.addView(h, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+            }
+            row(listOf(formatKm(r.distance) to "afstand", formatDuration(r.moving) to "rijtijd", kmh(avg) to "gem. km/u"))
+            row(listOf(formatDuration(total) to "totaal", formatDuration(standing) to "pauze/stil", kmh(r.max) to "max km/u"))
+            fun info(label: String, text: String) {
+                c.addView(TextView(this).apply {
+                    this.text = label
+                    textSize = 12f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(muted)
+                    setPadding(0, dp(6), 0, 0)
+                })
+                c.addView(TextView(this).apply {
+                    this.text = text
+                    textSize = 15f
+                    setTextColor(ink)
+                })
+            }
+            if (passed.isNotEmpty()) info("KNOOPPUNTEN", passed.joinToString(" \u2192 "))
+            if (towns.isNotEmpty()) info("ONDERWEG", towns.joinToString(" \u00B7 "))
+            c
+        }, actions = listOf(
+            SheetAction("Als GPX bewaren", false) { saveRideGpx(r) },
             SheetAction("Verwijderen", false) {
                 AlertDialog.Builder(this)
                     .setMessage("Deze rit verwijderen?")
@@ -2346,6 +2462,25 @@ class MapActivity : Activity() {
             },
             SheetAction("Sluiten", false) {}
         ))
+        d.setOnDismissListener { preview?.onDetach() }
+    }
+
+    private fun saveRideGpx(r: RideInfo) {
+        pendingGpx = try {
+            Rides.gpx(r.file)
+        } catch (_: Exception) {
+            null
+        }
+        if (pendingGpx == null) {
+            Toast.makeText(this, "Deze rit kon niet worden gelezen", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(Intent.EXTRA_TITLE, "rit-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date(r.start)) + ".gpx")
+        }
+        startActivityForResult(intent, REQ_GPX)
     }
 
     private fun downloadOffline() {
